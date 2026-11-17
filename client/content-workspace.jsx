@@ -270,7 +270,7 @@ function PromptPage({ item, draft, update, assets }) {
     {legacy ? <div className="md-prompt-legacy"><span>{t('已有旧版片段，可转换为文档继续编辑，原片段仍保留')}</span><button type="button" className="md-btn is-small" onClick={() => update({ promptText: promptDocument(item, draft) })}>{t('转换旧版提示词')}</button></div> : null}
     <div className="md-prompt-document-layout">
       <section className="md-work-panel md-prompt-document-editor">
-        
+
         <textarea ref={editor} aria-label={t('完整提示词')} maxLength={MAX_PROMPT_TEXT} value={text} spellCheck={false} placeholder={t('粘贴完整提示词，例如：\n\n全局视频参数：\n视觉风格：…\n技术规格：…\n角色设定：…\n\n分镜脚本：\n\n【第1段 - 13.3秒】\n镜头一：|景别与运镜|3.8秒|画面描述|台词与表演|音乐音效\n\n【第2段 - 12.4秒】\n镜头二：…')} onChange={event => update({ promptText: event.target.value })} />
         <footer><span>{text.length.toLocaleString()} / {MAX_PROMPT_TEXT.toLocaleString()}</span><span>{t('每段可包含多个镜头，支持小数秒')}</span></footer>
       </section>
