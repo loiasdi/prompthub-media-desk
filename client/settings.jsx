@@ -27,12 +27,18 @@ export function SettingsDialog() {
   const settings = useDesk(s => s.settings)
   const [form, setForm] = React.useState(null)
   const [testing, setTesting] = React.useState(false)
+  const [saving, setSaving] = React.useState(false)
   const [sample, setSample] = React.useState(null)
   const [advanced, setAdvanced] = React.useState(false)
+  const [tab, setTab] = React.useState('general')
+  React.useEffect(() => { if (open) setTab('general') }, [open])
+  const wasOpen = React.useRef(false)
   React.useEffect(() => {
-    if (!open || !settings) return
+    if (!open) { wasOpen.current = false; return }
+    if (!settings || wasOpen.current) return
+    wasOpen.current = true
     const { image } = settings
-    setForm({ source: image.source ?? 'http', language: settings.language ?? 'auto', baseUrl: image.baseUrl, model: image.model, apiKey: '', size: image.size, quality: image.quality, toolSize: image.toolSize ?? '1536x1024', toolQuality: image.toolQuality ?? '', extra: image.extra, exportDir: settings.exportDir ?? '', imageCount: settings.imageCount, shotCount: settings.shotCount })
+    setForm({ source: image.source ?? 'http', language: settings.language ?? 'auto', baseUrl: image.baseUrl ?? '', model: image.model ?? '', apiKey: '', size: image.size ?? '', quality: image.quality ?? '', toolSize: image.toolSize ?? '1536x1024', toolQuality: image.toolQuality ?? '', extra: image.extra ?? '', exportDir: settings.exportDir ?? '', documentDir: settings.documentDir ?? '', trashRetentionDays: settings.trashRetentionDays ?? 7, imageCount: settings.imageCount, shotCount: settings.shotCount })
     setSample(null)
   }, [open, settings])
   if (!open || !form) return null
@@ -40,6 +46,7 @@ export function SettingsDialog() {
   const set = (key, value) => setForm(f => ({ ...f, [key]: value }))
   const payload = () => ({
     language: form.language,
+    documentDir: form.documentDir, trashRetentionDays: Number(form.trashRetentionDays),
     image: { source: form.source, baseUrl: form.baseUrl, model: form.model, apiKey: form.apiKey, size: form.size, quality: form.quality, toolSize: form.toolSize, toolQuality: form.toolQuality, extra: form.extra },
     exportDir: form.exportDir, imageCount: Number(form.imageCount), shotCount: Number(form.shotCount),
   })
@@ -48,8 +55,16 @@ export function SettingsDialog() {
     <Dialog title={t('设置')} onClose={close} width={520}>
       <form className="md-form" onSubmit={async (event) => {
         event.preventDefault()
-        if (await saveSettings(payload())) close()
+        if (saving || testing) return
+        setSaving(true)
+        try { if (await saveSettings(payload())) close() }
+        finally { setSaving(false) }
       }}>
+        <fieldset disabled={saving || testing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'contents' }}>
+        <div className="md-capture-tabs" role="tablist" aria-label={t('设置分类')}>
+          {[['general', '普通设置'], ['api', 'API 设置']].map(([id, label]) => <button type="button" key={id} id={`md-settings-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`md-settings-panel-${id}`} className={tab === id ? 'is-on' : ''} onClick={() => setTab(id)}>{t(label)}</button>)}
+        </div>
+        {tab === 'general' ? <section className="md-settings-panel" role="tabpanel" id="md-settings-panel-general" aria-labelledby="md-settings-tab-general">
         <div className="md-field">
           <span>{t('语言')}</span>
           <div className="md-presets" role="radiogroup" aria-label={t('语言')}>
@@ -59,9 +74,27 @@ export function SettingsDialog() {
           </div>
         </div>
         <label className="md-field">
+          <span>{t('文档存储目录')}</span>
+          <input required value={form.documentDir} onChange={e => set('documentDir', e.target.value)} placeholder="/Users/…/自媒体工作台" />
+          <small>{t('填写完整目录路径。更换后自动迁移稿件、素材和回收站，旧目录保留为备份。')}</small>
+        </label>
+        <label className="md-field">
+          <span>{t('回收站自动清理')}</span>
+          <select value={form.trashRetentionDays} onChange={e => set('trashRetentionDays', e.target.value)}>
+            {[1, 3, 7, 15].map(days => <option key={days} value={days}>{t('删除 {days} 天后彻底清理', { days })}</option>)}
+          </select>
+          <small>{t('按删除时间计算，到期后永久删除。工作台运行时每小时检查，关闭期间到期的内容会在下次启动时清理。')}</small>
+        </label>
+        <label className="md-field">
           <span>{t('成稿保存到')}</span>
           <input value={form.exportDir} onChange={e => set('exportDir', e.target.value)} placeholder={settings.defaultExportDir} />
         </label>
+
+        <div className="md-field-row">
+          <label className="md-field"><span>{t('配图数量')}</span><input type="number" min="0" max="4" value={form.imageCount} onChange={e => set('imageCount', e.target.value)} /></label>
+          <label className="md-field"><span>{t('分镜格数')}</span><input type="number" min="0" max="12" value={form.shotCount} onChange={e => set('shotCount', e.target.value)} /></label>
+        </div>
+        </section> : <section className="md-settings-panel" role="tabpanel" id="md-settings-panel-api" aria-labelledby="md-settings-tab-api">
 
         <div className="md-field">
           <span>{t('生图来源')}</span>
@@ -99,10 +132,6 @@ export function SettingsDialog() {
           <small>{t('只保存在这台电脑上，不会写进内容数据，也不会被打包或发给模型。')}</small>
         </label>
         </> : null}
-        <div className="md-field-row">
-          <label className="md-field"><span>{t('配图数量')}</span><input type="number" min="0" max="4" value={form.imageCount} onChange={e => set('imageCount', e.target.value)} /></label>
-          <label className="md-field"><span>{t('分镜格数')}</span><input type="number" min="0" max="12" value={form.shotCount} onChange={e => set('shotCount', e.target.value)} /></label>
-        </div>
         <button type="button" className="md-advanced" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}><Icon name={advanced ? 'chevD' : 'chevR'} size={12} />{t('高级')}</button>
         {advanced ? (
           <>
@@ -120,17 +149,20 @@ export function SettingsDialog() {
           </>
         ) : null}
         {sample ? <img className="md-test-sample" src={sample} alt={t('测试图')} /> : null}
+        </section>}
         <div className="md-form-foot">
-          <button type="button" className="md-btn" disabled={testing} onClick={async () => {
+          {tab === 'api' ? <button type="button" className="md-btn" disabled={testing} onClick={async () => {
             setTesting(true)
             setSample(null)
-            setSample(await testImage(payload()))
+            setSample(await testImage({ image: payload().image }))
             setTesting(false)
-          }}>{testing ? <span className="md-shimmer">{t('正在试画…')}</span> : t('试画一张')}</button>
+          }}>{testing ? <span className="md-shimmer">{t('正在试画…')}</span> : t('试画一张')}</button> : null}
           <span style={{ flex: 1 }} />
           <button type="button" className="md-btn" onClick={close}>{t('取消')}</button>
           <button type="submit" className="md-btn is-primary">{t('保存')}</button>
         </div>
+        </fieldset>
+        {saving ? <small role="status">{t('正在保存设置与迁移文件，请稍候…')}</small> : null}
       </form>
     </Dialog>
   )

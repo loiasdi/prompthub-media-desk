@@ -1,3 +1,4 @@
+import { storedAssetPath, validAssetPath } from './asset-storage.js'
 // 一键保存：把成稿写成一个普通文件夹，脚本、封面、配图和分镜都在里面。
 import { existsSync } from 'node:fs'
 import { copyFile, mkdir, writeFile } from 'node:fs/promises'
@@ -43,10 +44,10 @@ export async function saveProduction(production, { filesDir, exportDir, videoCov
   const files = []
 
   const copy = async (asset, name) => {
-    const match = /^media-desk\/files\/([\w.-]+)$/.exec(asset?.src ?? '')
-    if (!match) return null
-    const file = `${name}${extname(match[1])}`
-    await copyFile(join(filesDir, match[1]), join(target, file))
+    const source = asset?.src?.startsWith('media-desk/files/') ? asset.src.slice(17) : ''
+    if (!validAssetPath(source)) return null
+    const file = `${name}${extname(source)}`
+    await copyFile(await storedAssetPath(filesDir, source), join(target, file))
     files.push(file)
     return file
   }

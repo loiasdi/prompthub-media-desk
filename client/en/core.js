@@ -1,7 +1,7 @@
 // 英文词典（core）。key 是中文原文，value 是英文。
 export const CORE = {
   // 侧栏和顶栏
-  '自媒体工作台': 'Media Desk',
+  '自媒体工作台': 'PromptHub MediaDesk',
   '工作台导航': 'Desk navigation',
   '灵感（导航）': 'Ideas',
   '灵感': 'Idea',
@@ -13,7 +13,7 @@ export const CORE = {
   '撤销上一步': 'Undo',
   '设置': 'Settings',
   '助手': 'Assistant',
-  '工作台加载失败：{error}': 'Couldn’t load Media Desk: {error}',
+  '工作台加载失败：{error}': 'Couldn’t load PromptHub MediaDesk: {error}',
   '重试': 'Retry',
   '正在铺开灵感…': 'Loading your ideas…',
 

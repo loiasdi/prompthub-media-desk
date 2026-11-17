@@ -4,6 +4,16 @@ import { dispatchOps, openItem, setDesk, useDesk } from './desk.js'
 import { Empty, Icon, Segmented } from './ui.jsx'
 import { plural, t, useLang } from './i18n.js'
 import { KIND_LABEL, STATUSES, STATUS_LABEL, displayItem, fmtWhen, posterOf, relativeDay } from './util.js'
+import { useWorkspace } from './workspace.js'
+
+function WorkspaceSummary({ item, compact = false }) {
+  const { assets, draft } = useWorkspace(item)
+  const counts = ['video', 'image', 'audio'].map(type => assets.filter(a => a.type === type).length)
+  return <div className={`md-content-files ${compact ? 'is-compact' : ''}`}>
+    {counts.some(Boolean) ? <span>{counts.map((n, i) => n ? `${t(['视频', '图片', '音频'][i])} ${n}` : '').filter(Boolean).join(' · ')}</span> : <span>{t('尚未添加素材')}</span>}
+    {draft.selectedVideo && assets.some(a => a.id === draft.selectedVideo) ? <small><Icon name="check" size={11} />{t('已选成片')}</small> : null}
+  </div>
+}
 
 function useContentItems() {
   const items = useDesk(s => s.state.items)
@@ -19,19 +29,18 @@ function BoardCard({ item: raw }) {
   const item = displayItem(raw)
   const poster = posterOf(item)
   return (
-    <button
-      type="button"
+    <article
       className="md-board-card"
       draggable
       onDragStart={(event) => {
         event.dataTransfer.setData('text/media-desk-item', item.id)
         event.dataTransfer.effectAllowed = 'move'
       }}
-      onClick={(event) => {
+    >
+      <button type="button" className="md-board-card-open" onClick={(event) => {
         const rect = event.currentTarget.getBoundingClientRect()
         openItem(item.id, { x: rect.left, y: rect.top, w: rect.width, h: rect.height })
-      }}
-    >
+      }}>
       {poster ? <img src={poster} alt="" loading="lazy" draggable={false} /> : null}
       <strong>{item.title}</strong>
       <span className="md-board-meta">
@@ -40,7 +49,14 @@ function BoardCard({ item: raw }) {
         {raw.production?.status === 'done' || item.drafts?.article ? <Icon name="pen" size={12} /> : null}
         {item.drafts?.script ? <Icon name="film" size={12} /> : null}
       </span>
-    </button>
+      </button>
+      <WorkspaceSummary item={raw} />
+      <div className="md-content-card-actions">
+        <button type="button" onClick={() => openItem(item.id, null, 'prompts')}><Icon name="film" size={13} />{t('提示词')}</button>
+        <button type="button" onClick={() => openItem(item.id, null, 'assets')}><Icon name="folder" size={13} />{t('素材')}</button>
+        <button type="button" onClick={() => openItem(item.id, null, 'publish')}><Icon name="upRight" size={13} />{t('发布')}</button>
+      </div>
+    </article>
   )
 }
 
@@ -117,13 +133,14 @@ function Table({ items }) {
                 </button>
               </th>
             ))}
+            <th>{t('素材与发布')}</th>
           </tr>
         </thead>
         <tbody>
           {sorted.map((item) => {
             const poster = posterOf(item)
             return (
-              <tr key={item.id} onClick={() => openItem(item.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter') openItem(item.id) }}>
+              <tr key={item.id} onClick={() => openItem(item.id)} tabIndex={0} onKeyDown={(event) => { if (event.key === 'Enter' && event.target === event.currentTarget) openItem(item.id) }}>
                 <td className="md-table-title">
                   <span className="md-thumb">{poster ? <img src={poster} alt="" loading="lazy" /> : <span>{item.title.slice(0, 1)}</span>}</span>
                   <span><strong>{item.title}</strong><small>{item.parentId ? `${t('分支')} · ` : ''}{t(KIND_LABEL[item.kind])}{item.source ? ` · ${item.source}` : ''}</small></span>
@@ -132,6 +149,7 @@ function Table({ items }) {
                 <td>{item.platform ? t(item.platform) : '—'}</td>
                 <td className="md-nowrap">{item.scheduledAt ? fmtWhen(item.scheduledAt) : '—'}</td>
                 <td className="md-nowrap">{relativeDay(item.createdAt)}</td>
+                <td className="md-content-table-files"><WorkspaceSummary item={item} compact /><button type="button" className="md-inline-link" onClick={event => { event.stopPropagation(); openItem(item.id, null, 'assets') }}>{t('查看素材')}</button></td>
               </tr>
             )
           })}

@@ -12,6 +12,7 @@ const DEFAULTS = {
   imageCount: 2,
   shotCount: 6,
   language: 'auto',
+  trashRetentionDays: 7,
 }
 
 function clamp(value, min, max, fallback) {
@@ -21,9 +22,11 @@ function clamp(value, min, max, fallback) {
 
 export class Settings {
   constructor(root) {
-    this.file = join(root, 'settings.json')
+    this.root = root
     this.value = null
   }
+
+  get file() { return join(typeof this.root === 'string' ? this.root : this.root.root, 'settings.json') }
 
   async read() {
     // 每次都读文件：桌面版和 Web 版可能同时运行
@@ -38,9 +41,13 @@ export class Settings {
   }
 
   /** 空密钥表示不修改，clearKey 才会删除。 */
-  async update(patch) {
+  async update(patch, { validateOnly = false } = {}) {
     const current = await this.read()
     const next = structuredClone(current)
+    if (patch.trashRetentionDays !== undefined) {
+      if (![1, 3, 7, 15].includes(patch.trashRetentionDays)) throw Object.assign(new Error('回收站保留时间只能为 1、3、7、15 天'), { status: 400 })
+      next.trashRetentionDays = patch.trashRetentionDays
+    }
     const image = patch.image ?? {}
     if (image.source !== undefined) {
       if (!['http', 'tool'].includes(image.source)) throw Object.assign(new Error(tr('生图来源无效')), { status: 400 })
@@ -90,6 +97,7 @@ export class Settings {
     if (patch.imageCount !== undefined) next.imageCount = clamp(patch.imageCount, 0, 4, current.imageCount)
     if (['auto', 'zh', 'en'].includes(patch.language)) next.language = patch.language
     if (patch.shotCount !== undefined) next.shotCount = clamp(patch.shotCount, 0, 12, current.shotCount)
+    if (validateOnly) return next
     const tmp = `${this.file}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify(next, null, 2), { mode: 0o600 })
     await chmod(tmp, 0o600)

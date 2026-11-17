@@ -48,7 +48,7 @@ const RAW_EN = [
   ['Day 300 of a one-person company: three pivots in the desert', 'The revenue curve, the mistakes, and the afternoon I almost quit.', ['Solo business', 'Retrospective'], 'Retro draft'],
   ['The 5 questions people ask most in the comments', '1. Can I do this without a tech background? 2. What does it cost per month? 3. Which model? 4. Is my data safe? 5. How long until I get the hang of it?', ['Audience insight'], 'Comments'],
   ['Cover color test: why bold stripes get more clicks', 'Three A/B rounds. Stripes won on clicks but didn\'t keep people watching any longer.', ['Covers', 'Experiment'], 'Test log'],
-  ['You don\'t lack ideas. You lack a place to keep them.', 'Could be the opening line for Media Desk itself.', ['Method'], 'Quick note'],
+  ['You don\'t lack ideas. You lack a place to keep them.', 'Could be the opening line for PromptHub MediaDesk itself.', ['Method'], 'Quick note'],
   ['The first product I finished on a night bus', 'City lights in the background, told in first person. Mood first, go light on the tech.', ['Story', 'Indie hacking'], 'Vlog'],
   ['The nerve to leave space: three products that got better after cutting half their features', 'Deleting is a design decision too. Make the case with real examples.', ['Product', 'Design'], 'Product notes'],
   ['The growth staircase: the real stages from 0 to 10k followers', 'Each step needs different work. Don\'t use a 100k playbook to win your first thousand.', ['Growth'], 'example.com'],

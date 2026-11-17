@@ -1,8 +1,9 @@
-// 点开灵感后的工作区：左边对话，右边是一张稿面。稿面的格子一开始就排好，同时开工，一点点长满。
+// 内容编辑台：正文为主，右侧查看制作参考，助手按需展开。
 import React from 'react'
 import { ChatPanel } from './chat.jsx'
-import { downloadCover } from './cover.js'
-import { cancelProduce, closeItem, dispatchOps, regenAsset, revealSaved, runProduce, saveProduced, setDesk, toast, useDesk, watchProduction } from './desk.js'
+import { useWorkspace } from './workspace.js'
+import { ContentWorkspace } from './content-workspace.jsx'
+import { cancelProduce, closeItem, dispatchOps, regenAsset, runProduce, saveProduced, setDesk, toast, useDesk, watchProduction } from './desk.js'
 import { plural, t } from './i18n.js'
 import { Icon, IconButton } from './ui.jsx'
 import { SPRING_SNAP, SPRING_SOFT, STYLE_CATEGORIES, fmtDate, fmtWhen, reducedMotion, renderMarkdown, styleIcon, textLength, toLocalInput } from './util.js'
@@ -17,7 +18,7 @@ function unescapeJson(text) {
   }
 }
 
-function AutoText({ value, onCommit, className, label, disabled }) {
+function AutoText({ value, onCommit, className, label, disabled, allowEmpty = false, placeholder }) {
   const [draft, setDraft] = React.useState(value ?? '')
   const ref = React.useRef(null)
   React.useEffect(() => setDraft(value ?? ''), [value])
@@ -28,8 +29,8 @@ function AutoText({ value, onCommit, className, label, disabled }) {
     el.style.height = `${el.scrollHeight}px`
   }, [draft])
   return (
-    <textarea ref={ref} rows={1} aria-label={label} className={className} value={draft} disabled={disabled}
-      onChange={e => setDraft(e.target.value)} onBlur={() => { if (draft.trim() && draft !== (value ?? '')) onCommit(draft) }} />
+    <textarea ref={ref} rows={1} aria-label={label} className={className} value={draft} disabled={disabled} placeholder={placeholder}
+      onChange={e => setDraft(e.target.value)} onBlur={() => { if ((allowEmpty || draft.trim()) && draft !== (value ?? '')) onCommit(draft) }} />
   )
 }
 
@@ -110,38 +111,18 @@ function IdeaCard({ item, live, settings }) {
   )
 }
 
-/** 视频封面：画面叠大字。没有画面时是一张渐变的纯文字封面。 */
-function Poster({ production, item, onOpen, onRetry }) {
-  const src = production?.cover?.src ?? (!production ? item.media?.poster ?? (item.media?.src && item.kind !== 'video' ? item.media.src : null) : null)
-  const text = production?.stage === 'brief' ? '' : production?.coverText || production?.title || ''
-  const status = production?.cover?.status ?? 'idle'
-  return (
-    <div className={`md-poster ${src ? '' : 'is-type'}`} data-status={status} onClick={production?.cover?.src ? onOpen : undefined} role={production?.cover?.src ? 'button' : undefined}>
-      {src ? <img key={src} src={src} alt={t('视频封面')} draggable={false} /> : null}
-      {text ? <b>{text}</b> : null}
-      {onRetry && ['failed', 'skipped'].includes(status) ? <button type="button" className="md-plate-failed" title={production?.cover?.error} onClick={(event) => { event.stopPropagation(); onRetry() }}><Icon name="refresh" size={12} />{status === 'failed' ? t('封面没画成，重画') : t('画封面')}</button> : null}
-    </div>
-  )
-}
-
 function Stat({ icon, value, unit }) {
   return <span className="md-hero-stat"><Icon name={icon} size={13} /><b>{value}</b>{unit}</span>
 }
 
-/** 主视觉：渐变底、大标题、数字，右边是视频封面和配图的拼贴。 */
+/** 文档标题与交付操作。 */
 function HeroTile({ item, live, onView }) {
-  const settings = useDesk(s => s.settings)
   const production = item.production
   const running = production?.status === 'running'
   const liveTitle = production?.stage === 'brief' && live?.title ? unescapeJson(live.title) : null
   const title = liveTitle ?? production?.title ?? item.title
   const words = textLength(production?.article || live?.text || '')
-  const shots = production?.shots ?? []
-  const seconds = shots.reduce((sum, shot) => sum + (shot.seconds ?? 0), 0)
-  const images = production?.images ?? []
   const done = production?.status === 'done'
-  const pictures = [production?.cover, ...images].filter(a => a?.src).length
-  const showFigures = settings?.imageReady || images.some(a => a?.src)
   const [saving, setSaving] = React.useState(false)
   const copy = async () => {
     await navigator.clipboard.writeText(`# ${production.title}\n\n${production.article}`)
@@ -152,30 +133,23 @@ function HeroTile({ item, live, onView }) {
     await saveProduced(item.id)
     setSaving(false)
   }
-  const again = () => setDesk({
-    dialog: {
-      title: t('重新成稿'),
-      submitLabel: t('重新生成'),
-      fields: [{ name: 'note', label: t('现在的文章、封面和分镜会被替换，也会再消耗一次模型额度。'), type: 'hidden' }],
-      onSubmit: () => runProduce(item.id),
-    },
-  })
-  const figures = images.length ? images : [null, null].slice(0, settings?.imageCount ?? 2)
   return (
     <section className={`md-tile md-tile-hero ${running ? 'is-running' : ''}`}>
       <div className="md-hero-copy">
-        <AutoText className={`md-hero-title ${production ? '' : 'is-idle'}`} label={t('标题')} value={title} disabled={!done} onCommit={next => dispatchOps([{ op: 'update_production', id: item.id, title: next }], { label: t('修改标题'), silent: true })} />
+        {running ? <span className="md-document-label">{t('正在成稿…')}</span> : null}
+        <span className="md-manuscript-field-label">{t('标题')}</span>
+        <AutoText className={`md-hero-title ${production ? '' : 'is-idle'}`} label={t('标题')} value={title} disabled={running} onCommit={next => dispatchOps([{ op: 'update_production', id: item.id, title: next }], { label: t('修改标题'), silent: true })} />
+        <div className="md-manuscript-toolbar"><details className="md-manuscript-publishing"><summary>{t('发布信息：话题与描述')}</summary><div className="md-manuscript-meta">
+          <label><span>{t('话题')}</span><AutoText className="md-manuscript-meta-input" label={t('话题')} allowEmpty disabled={running} value={production?.topics ?? (item.tags || []).map(tag => tag.startsWith('#') ? tag : `#${tag}`).join(' ')} placeholder={t('#话题一 #话题二')} onCommit={topics => dispatchOps([{ op: 'update_production', id: item.id, topics }], { label: t('修改话题'), silent: true })} /></label>
+          <label><span>{t('描述')}</span><AutoText className="md-manuscript-meta-input" label={t('描述')} allowEmpty disabled={running} value={production?.description ?? ''} placeholder={t('写一段发布简介，介绍这条内容讲什么')} onCommit={description => dispatchOps([{ op: 'update_production', id: item.id, description }], { label: t('修改描述'), silent: true })} /></label>
+        </div></details>
         <div className="md-hero-stats">
           {words ? <Stat icon="pen" value={words} unit={t('字', { s: plural(words, '', 's') })} /> : null}
-          {shots.length ? <Stat icon="film" value={shots.length} unit={t('镜', { s: plural(shots.length, '', 's') })} /> : null}
-          {seconds ? <Stat icon="clock" value={seconds} unit={t('秒')} /> : null}
-          {pictures ? <Stat icon="image" value={pictures} unit={t('张图', { s: plural(pictures, '', 's') })} /> : null}
         </div>
         {done ? (
           <div className="md-hero-actions">
             <button type="button" className="md-pill is-primary" onClick={copy}><Icon name="copy" size={14} />{t('复制脚本')}</button>
             <button type="button" className="md-pill" onClick={save} disabled={saving}><Icon name="save" size={14} />{saving ? t('保存中…') : t('保存')}</button>
-            <button type="button" className="md-pill" onClick={() => downloadCover({ src: production.cover?.src, text: production.coverText || production.title }, production.title).catch(err => toast(err.message, { error: true }))}><Icon name="image" size={14} />{t('下载封面')}</button>
             <label className="md-pill md-date-pill">
               <Icon name="calendar" size={14} />{item.scheduledAt ? fmtWhen(item.scheduledAt) : t('排期')}
               <input type="datetime-local" aria-label={t('排期')} value={toLocalInput(item.scheduledAt)} onClick={(event) => { try { event.currentTarget.showPicker() } catch { /* 不支持时用原生交互 */ } }} onChange={(event) => {
@@ -185,20 +159,9 @@ function HeroTile({ item, live, onView }) {
             </label>
           </div>
         ) : null}
+        </div>
       </div>
-      <div className="md-collage">
-        <div className="md-collage-main"><Poster production={production} item={item} onOpen={() => onView('cover')} onRetry={settings?.imageReady && production?.status === 'done' && production.cover ? () => regenAsset(item.id, 'cover') : undefined} /></div>
-        {showFigures ? figures.map((image, i) => <div key={i} className={`md-collage-side is-${i}`}><Plate asset={image} alt={image?.caption ?? t('配图 {n}', { n: i + 1 })} onOpen={image?.src ? () => onView(`image:${i}`) : undefined} onRetry={image && settings?.imageReady && production?.status === 'done' ? () => regenAsset(item.id, `image:${i}`) : undefined} /></div>) : null}
-      </div>
-      <div className="md-hero-corner">
-        {production?.savedAt ? <IconButton icon="folder" label={t('打开保存的文件夹')} onClick={() => revealSaved(item.id)} /> : null}
-        {done ? <IconButton icon="refresh" label={t('重新成稿')} onClick={again} /> : null}
-        <IconButton icon="gear" label={t('设置')} onClick={() => setDesk({ settingsOpen: true })} />
-        <IconButton icon="trash" label={t('删除这条灵感')} onClick={() => {
-          dispatchOps([{ op: 'delete_item', id: item.id }], { label: t('删除《{title}》', { title: item.title.slice(0, 10) }) })
-          closeItem()
-        }} />
-      </div>
+
     </section>
   )
 }
@@ -242,7 +205,7 @@ function ArticleTile({ item, live, open, onToggle, onView, tileRef }) {
   const scroller = React.useRef(null)
   const [editing, setEditing] = React.useState(false)
   const [picked, setPicked] = React.useState(null)
-  const article = production?.article ?? ''
+  const article = production?.article ?? item.body ?? ''
   const [draft, setDraft] = React.useState(article)
   React.useEffect(() => setDraft(article), [article])
   const text = article || (live?.text ?? '').replace(/^\s*#\s+.*\n?/, '')
@@ -278,7 +241,7 @@ function ArticleTile({ item, live, open, onToggle, onView, tileRef }) {
   return (
     <>
       <header className="md-tile-head">
-        <h2>{t('脚本')}</h2>
+        <h2>{t('正文')}</h2>
         <span className="md-grow" />
         {article ? (
           <>
@@ -288,8 +251,8 @@ function ArticleTile({ item, live, open, onToggle, onView, tileRef }) {
           </>
         ) : null}
       </header>
-      {editing ? (
-        <textarea className="md-article-edit" aria-label={t('脚本')} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} />
+      {!running && (editing || !text) ? (
+        <textarea className="md-article-edit" aria-label={t('正文')} placeholder={t('在这里写稿，或粘贴已有正文')} value={draft} onChange={e => setDraft(e.target.value)} onBlur={save} />
       ) : text ? (
         <div className="md-article-scroll" ref={scroller} onMouseUp={onMouseUp} onScroll={() => setPicked(null)}>
           {open ? <ArticleBody production={production} text={text} onView={onView} /> : <div className="md-prose" dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} />}
@@ -305,46 +268,6 @@ function ArticleTile({ item, live, open, onToggle, onView, tileRef }) {
         }}><Icon name="chat" size={12} />{t('让助手改这段')}</button>
       ) : null}
       {words && streaming ? <span className="md-tile-foot">{t('{n} 字', { n: words, s: plural(words, '', 's') })}</span> : null}
-    </>
-  )
-}
-
-function ShotsTile({ item, live, count, open, onToggle, onView }) {
-  const imageReady = useDesk(s => s.settings?.imageReady)
-  const shots = item.production?.shots ?? []
-  const visuals = live?.visuals ?? []
-  // 策划案还在写的时候，分镜说明已经一格一格出现了
-  const cells = shots.length ? shots : Array.from({ length: count }, (_, i) => ({ no: i + 1, visual: visuals[i] ? unescapeJson(visuals[i]) : '', status: item.production?.status === 'running' ? 'pending' : 'idle' }))
-  const copy = async () => {
-    const table = shots.map((s, i) => t('{no}. {shot}｜{sec} 秒\n画面：{visual}\n口播：{voice}', { no: i + 1, shot: t(s.shot), sec: s.seconds, visual: s.visual, voice: s.voice })).join('\n\n')
-    await navigator.clipboard.writeText(table)
-    toast(t('分镜脚本已复制'))
-  }
-  const total = shots.reduce((sum, shot) => sum + (shot.seconds ?? 0), 0)
-  return (
-    <>
-      <header className="md-tile-head">
-        <h2>{t('分镜头脚本')}</h2>
-        {total ? <span className="md-tile-meta">{t('约 {n} 秒', { n: total })}</span> : null}
-        <span className="md-grow" />
-        {shots.length ? (
-          <>
-            <IconButton icon="copy" label={t('复制分镜脚本')} onClick={copy} />
-            <IconButton icon={open ? 'close' : 'expand'} label={open ? t('收起') : t('放大')} onClick={onToggle} />
-          </>
-        ) : null}
-      </header>
-      <div className="md-shots" style={{ '--rows2': Math.ceil(cells.length / 2), '--rows3': Math.ceil(cells.length / 3) }}>
-        {cells.map((shot, index) => (
-          <figure key={index} className="md-shot">
-            <Plate asset={shot} paper alt={shot.visual} mark={String(shot.no ?? index + 1).padStart(2, '0')} onOpen={shot.src ? () => onView(`shot:${index}`) : undefined} onRetry={imageReady && item.production?.status === 'done' && shot.prompt !== undefined ? () => regenAsset(item.id, `shot:${index}`) : undefined} />
-            <figcaption>
-              <span className="md-shot-meta"><b>{String(shot.no ?? index + 1).padStart(2, '0')}</b>{shot.shot ? ` ${t(shot.shot)} · ${t('{n} 秒', { n: shot.seconds })}` : ''}</span>
-              <p>{shot.voice || shot.visual}</p>
-            </figcaption>
-          </figure>
-        ))}
-      </div>
     </>
   )
 }
@@ -403,7 +326,7 @@ function Viewer({ item, target, onChange, onClose }) {
 }
 
 function Sheet({ item, live }) {
-  const settings = useDesk(s => s.settings)
+  const { draft: planning } = useWorkspace(item)
   const [open, setOpen] = React.useState(null)
   const [viewing, setViewing] = React.useState(null)
   const bento = React.useRef(null)
@@ -464,14 +387,20 @@ function Sheet({ item, live }) {
   })
   return (
     <div className="md-sheet">
-      <div className={`md-bento ${open ? 'has-open' : ''}`} ref={bento}>
+      <div className={`md-bento is-writing ${open ? 'has-open' : ''}`} ref={bento}>
         <HeroTile item={item} live={live} onView={setViewing} />
         <section {...tile('article')}>
+          {planning.outlineText ? <details className="md-writing-outline"><summary>{t('写稿参考：内容大纲')}</summary><div><p>{planning.outlineText}</p><button type="button" className="md-btn is-small" onClick={() => setDesk({ studioTab: 'outline' })}>{t('修改大纲')}</button></div></details> : null}
           <ArticleTile item={item} live={live} open={open === 'article'} onToggle={() => toggle('article')} onView={setViewing} tileRef={articleRef} />
         </section>
-        <section {...tile('shots')}>
-          <ShotsTile item={item} live={live} count={settings?.shotCount ?? 6} open={open === 'shots'} onToggle={() => toggle('shots')} onView={setViewing} />
-        </section>
+        <footer className="md-stage-footer">
+          <span>{t(item.status === 'idea' ? '先整理思路，再展开正文' : item.status === 'outline' ? '大纲确定后，开始写草稿' : '稿子确定后，再开始设计画面')}</span>
+          <button type="button" className="md-btn is-primary" disabled={item.production?.status === 'running' || (!['idea', 'outline'].includes(item.status) && !(item.production?.article || item.body || '').trim())} onClick={async () => {
+            if (item.status === 'idea' || item.status === 'outline') {
+              setDesk({ studioTab: 'outline' })
+            } else setDesk({ studioTab: 'prompts' })
+          }}>{t(item.status === 'idea' ? '下一步：整理大纲' : item.status === 'outline' ? '大纲确定，进入草稿' : '稿件定稿，进入视频提示词')}<Icon name="chevR" size={14} /></button>
+        </footer>
       </div>
       {viewing ? <Viewer item={item} target={viewing} onChange={setViewing} onClose={() => setViewing(null)} /> : null}
     </div>
@@ -487,6 +416,7 @@ export function Studio() {
   const live = useDesk(s => s.live[s.focusId])
   const settings = useDesk(s => s.settings)
   const chatOpen = useDesk(s => s.studioDock)
+  const creationStage = useDesk(s => s.studioTab)
   const ref = React.useRef(null)
   const production = item?.production
   const running = production?.status === 'running'
@@ -516,35 +446,39 @@ export function Studio() {
     if (!id) return undefined
     const onKey = (event) => {
       // 有格子放大或大图打开时，Esc 只收回它们
-      if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('.md-tile.is-open,.md-viewer') && !/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) closeItem()
+      if (event.key === 'Escape' && !event.defaultPrevented && !document.querySelector('.md-tile.is-open,.md-viewer,.md-dialog-mask') && !/^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) {
+        if (chatOpen) setDesk({ studioDock: false })
+        else closeItem()
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [id])
+  }, [id, chatOpen])
 
   // 打开的这条被删掉或撤销掉时，退回灵感墙，不留空白页
   React.useEffect(() => { if (id && !item) closeItem() }, [id, item])
   if (!item) return null
   return (
-    <div className={`md-studio ${chatOpen ? 'chat-open' : ''}`} ref={ref} role="dialog" aria-label={t('灵感')}>
-      <div className="md-studio-chat">
+    <div className={`md-studio md-editor ${chatOpen || running ? 'chat-open' : ''}`} ref={ref} role="dialog" aria-label={t('灵感')}>
+      <div className="md-studio-chat" id="studio-assistant" inert={!(chatOpen || running) ? '' : undefined}>
         <ChatPanel
           itemId={item.id}
           head={(
             <>
-              <IconButton icon="chevL" label={t('返回灵感')} onClick={closeItem} />
-              <h2>{t('成稿')}</h2>
+              <h2>{t('创作助手')}</h2>
+              <span className="md-grow" />
+              <IconButton icon="close" label={t('收起助手')} onClick={() => setDesk({ studioDock: false })} />
             </>
           )}
-          top={<IdeaCard item={item} live={live} settings={settings} />}
-          suggestions={production?.status === 'done' ? DONE_SUGGESTIONS.map(row => t(row)) : []}
+          top={['idea', 'outline', 'article'].includes(creationStage) ? <p className="md-discussion-context">{t(creationStage === 'idea' ? '围绕这条灵感讨论选题，确认后整理成大纲。' : creationStage === 'outline' ? '讨论并修改大纲，确认后再开始写稿。' : '依据大纲讨论和修改正文，按你的要求保存稿件。')}</p> : <IdeaCard item={item} live={live} settings={settings} />}
+          suggestions={(creationStage === 'idea' ? ['先讨论这个选题的角度和受众', '根据我们的讨论整理并保存大纲'] : creationStage === 'outline' ? ['看看这个大纲哪里需要改进', '按刚才讨论的方案修改并保存大纲'] : creationStage === 'article' ? ['依据大纲先讨论正文怎么写', '根据确认的大纲写出完整口播稿'] : production?.status === 'done' ? DONE_SUGGESTIONS : []).map(row => t(row))}
           placeholder={running ? t('正在成稿，马上就好') : production?.status === 'done' ? t('想怎么改，直接说') : t('补充点想法，或者直接说要什么')}
           disabled={running}
           intro={false}
         />
       </div>
-      <button type="button" className="md-chat-toggle" aria-label={t('打开对话')} onClick={() => setDesk(s => ({ studioDock: !s.studioDock }))}><Icon name="chat" size={16} /></button>
-      <Sheet key={item.id} item={item} live={live} />
+
+      <ContentWorkspace key={item.id} item={item}><Sheet item={item} live={live} /></ContentWorkspace>
     </div>
   )
 }

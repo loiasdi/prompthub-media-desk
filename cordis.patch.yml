@@ -1,4 +1,4 @@
-# dsh-media-desk bundle patch：同一个包提供 host 半片与浏览器半片
+# PromptHub MediaDesk：保留 media-desk 节点 ID，兼容原有工作区。
 - insert:
     - id: media-desk
-      name: 'dsh-media-desk'
+      name: 'prompthub-media-desk'

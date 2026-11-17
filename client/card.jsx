@@ -1,3 +1,4 @@
+import { playableVideo, sourceKind, sourceImage } from '../src/inspiration-source.js'
 // 灵感卡片：散落、瀑布流复用同一张卡。
 import React from 'react'
 import { setDesk } from './desk.js'
@@ -10,7 +11,7 @@ export function Media({ item, autoPlay = false, controls = false, onFirstFrame }
   const [broken, setBroken] = React.useState(false)
   React.useEffect(() => {
     const video = ref.current
-    if (!video || item.kind !== 'video') return
+    if (!video || !playableVideo(item)) return
     if (autoPlay) video.play().catch(() => {})
     else {
       video.pause()
@@ -19,10 +20,10 @@ export function Media({ item, autoPlay = false, controls = false, onFirstFrame }
   }, [autoPlay, item.kind])
   if (!item.media || broken) return <div className="md-media-fallback"><span>{item.title.slice(0, 1)}</span></div>
   const ratio = item.media.w && item.media.h ? { aspectRatio: `${item.media.w} / ${item.media.h}` } : undefined
-  if (item.kind === 'video') {
+  if (playableVideo(item)) {
     return <video ref={ref} className="md-media" style={ratio} src={item.media.src} poster={item.media.poster} muted={!controls} loop playsInline controls={controls} preload="metadata" onError={() => setBroken(true)} />
   }
-  return <img className="md-media" style={ratio} src={item.media.src} alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" onError={() => setBroken(true)} onLoad={onFirstFrame} />
+  return <img className="md-media" style={ratio} src={sourceImage(item)} alt="" loading="lazy" draggable={false} referrerPolicy="no-referrer" onError={() => setBroken(true)} onLoad={onFirstFrame} />
 }
 
 function hostOf(url) {
@@ -34,7 +35,8 @@ function hostOf(url) {
 }
 
 export function Card({ item: raw, onOpen }) {
-  const item = displayItem(raw)
+  const displayed = displayItem(raw)
+  const item = { ...displayed, kind: sourceKind(displayed) }
   const inverted = item.pinned
   const running = item.production?.status === 'running'
   const [hover, setHover] = React.useState(false)
@@ -60,7 +62,7 @@ export function Card({ item: raw, onOpen }) {
     >
       {hasMedia ? (
         <div className="md-card-media" data-media={item.id}>
-          <Media item={item} autoPlay={hover} />
+          <Media item={item} autoPlay={hover} />{item.mediaItems?.length > 1 ? <span className="md-card-media-count">{item.mediaItems.length} {t('个素材')}</span> : null}
           {item.kind === 'video' ? <span className="md-card-play"><Icon name="play" size={12} fill /></span> : null}
         </div>
       ) : null}

@@ -323,7 +323,7 @@ test('Producer 跑完整条线：文章、规划、全部图片，语气进入�
     assert.match(p.article, /## 第一节/)
     assert.doesNotMatch(p.article, /模型标题/)
     assert.equal(p.cover.status, 'done')
-    assert.match(p.cover.src, /^media-desk\/files\/g_.+\.png$/)
+    assert.match(p.cover.src, /^media-desk\/files\/seed_2\/g_.+\.png$/)
     assert.equal(p.shots.length, 2)
     assert.ok(p.shots.every(s => s.status === 'done'))
     assert.equal(item.status, 'draft')
@@ -331,7 +331,7 @@ test('Producer 跑完整条线：文章、规划、全部图片，语气进入�
     assert.ok(prompts.some(x => x.includes('black and white') && x.includes('a man')))
     assert.ok(systems.every(x => x.includes('短句，爱用比喻')))
     assert.ok(isPlan(systems[0]))
-    assert.equal((await stat(join(dir, 'files', p.cover.src.split('/').pop()))).size, PNG.length)
+    assert.equal((await stat(join(dir, '内容', 'seed_2', '素材', p.cover.src.split('/').pop()))).size, PNG.length)
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -409,7 +409,8 @@ test('Producer 一张图失败不影响其他，可以单独重画', async () =>
     assert.equal(p.shots[1].status, 'done')
     fail = false
     await producer.regenerate('seed_2', 'shot:0')
-    await new Promise(r => setTimeout(r, 40))
+    for (let i = 0; i < 400 && producer.anyAssetActive('seed_2'); i++) await new Promise(r => setTimeout(r, 5))
+    assert.equal(producer.anyAssetActive('seed_2'), false)
     p = (await store.read()).items.find(i => i.id === 'seed_2').production
     assert.equal(p.shots[0].status, 'done')
     await assert.rejects(producer.regenerate('seed_2', '../x'), /目标无效/)
@@ -924,4 +925,28 @@ test('状态规则：发布时间、排期与取消排期、清空示例不留�
   applyOps(state, [{ op: 'clear_samples' }])
   assert.equal(state.items.find(row => row.id === child.target).parentId, null)
   assert.equal(state.metrics.length, 0)
+})
+
+
+test('创作讨论能读取首页灵感和独立大纲，保存大纲不推进状态且拒绝过期覆盖', () => {
+  const state = seed()
+  const item = state.items[0]
+  item.body = '首页输入的角色选题'
+  item.status = 'idea'
+  const before = item.production
+  const prompts = chatPrompts(state, '先讨论方向', { focusId: item.id, stage: 'idea' })
+  assert.match(prompts.user, /首页输入的角色选题/)
+  assert.match(prompts.system, /单纯探讨、提问、提出选项时 ops 为空/)
+  const saved = applyOps(state, [{ op: 'update_planning', id: item.id, field: 'outlineText', text: '开场问题 → 案例 → 方法', revision: 0 }])
+  assert.equal(saved.errors.length, 0)
+  assert.equal(item.workspace.outlineText, '开场问题 → 案例 → 方法')
+  assert.equal(item.workspace.revision, 1)
+  assert.equal(item.status, 'idea')
+  assert.equal(item.production, before)
+  const stale = applyOps(state, [{ op: 'update_planning', id: item.id, field: 'outlineText', text: '旧回复', revision: 0 }])
+  assert.equal(stale.errors.length, 1)
+  assert.equal(item.workspace.outlineText, '开场问题 → 案例 → 方法')
+  const writing = chatPrompts(state, '按大纲写稿', { focusId: item.id, stage: 'article' })
+  assert.match(writing.user, /开场问题 → 案例 → 方法/)
+  assert.match(writing.system, /update_production/)
 })

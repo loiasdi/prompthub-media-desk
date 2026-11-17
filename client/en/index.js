@@ -2,5 +2,6 @@
 import { CORE } from './core.js'
 import { PAGES } from './pages.js'
 import { STUDIO } from './studio.js'
+import { WORKSPACE } from './workspace.js'
 
-export const EN = { ...CORE, ...PAGES, ...STUDIO }
+export const EN = { ...CORE, ...PAGES, ...STUDIO, ...WORKSPACE }

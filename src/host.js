@@ -1,4 +1,10 @@
-// dsh-media-desk host 半片：/media-desk/* 接口、文件服务和模型调用。
+import { parseSharedLink, sourceKind } from './inspiration-source.js'
+import { PACKAGE_NAME } from './brand.js'
+import { relocateStorage } from './storage-management.js'
+import { FeishuSync } from './feishu/sync.js'
+import { storedAssetPath, validAssetPath } from './asset-storage.js'
+import { coverPromptAction, coverImageAction } from './cover-design.js'
+// PromptHub MediaDesk host 半片：/media-desk/* 接口、文件服务和模型调用。
 import { createReadStream } from 'node:fs'
 import { execFile } from 'node:child_process'
 import { stat, writeFile } from 'node:fs/promises'
@@ -19,12 +25,13 @@ import { normalizeStyle, stylePrompts } from './style.js'
 import { dshHome, Store } from './store.js'
 import { currentLang, platformName, tr, withLang } from './i18n.js'
 import { localizeSamples, samplesNeedLocale } from './seed.js'
+import { ContentAssets, MEDIA_MIME } from './content-assets.js'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
 const MAX_JSON = 4_000_000
 const MAX_UPLOAD = 250_000_000
-const MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime' }
-const UPLOAD_EXT = Object.fromEntries(Object.entries(MIME).filter(([ext]) => ext !== '.jpeg').map(([ext, type]) => [type, ext]))
+const MIME = MEDIA_MIME
+const UPLOAD_EXT = Object.fromEntries(Object.entries(MIME).filter(([ext, type]) => ext !== '.jpeg' && !type.startsWith('audio/')).map(([ext, type]) => [type, ext]))
 
 function json(res, status, body) {
   res.statusCode = status
@@ -80,6 +87,7 @@ async function sendFile(req, res, file) {
     res.statusCode = 206
     res.setHeader('content-range', `bytes ${start}-${end}/${info.size}`)
     res.setHeader('content-length', end - start + 1)
+    if (req.method === 'HEAD') return res.end()
     return createReadStream(file, { start, end }).pipe(res)
   }
   res.statusCode = 200
@@ -103,6 +111,7 @@ async function chatTurn(ctx, store, desk, body) {
   const message = String(body.message || '').trim()
   if (!message) throw Object.assign(new Error(tr('消息为空')), { status: 400 })
   const focusId = typeof body.focusId === 'string' ? body.focusId : undefined
+  const stage = ['idea', 'outline', 'article'].includes(body.stage) ? body.stage : undefined
   const state = await store.read()
   const snapshot = JSON.parse(JSON.stringify(state))
   let plan
@@ -111,9 +120,9 @@ async function chatTurn(ctx, store, desk, body) {
   const wasDown = modelStatus.ok === false
   try {
     const history = snapshot.chat.filter(row => (row.itemId ?? null) === (focusId ?? null))
-    const { system, user } = chatPrompts(snapshot, message, { focusId, history })
+    const { system, user } = chatPrompts(snapshot, message, { focusId, stage, history })
     const editing = snapshot.items.find(row => row.id === focusId)?.production?.status === 'done'
-    const { text, model } = await callModel(ctx, { system, user, maxTokens: editing ? 8000 : 2000, light: true, signal: AbortSignal.timeout(editing ? 240_000 : 90_000) })
+    const { text, model } = await callModel(ctx, { system, user, maxTokens: editing || stage ? 8000 : 2000, light: true, signal: AbortSignal.timeout(editing ? 240_000 : 90_000) })
     engine = model
     try {
       plan = extractJson(text)
@@ -124,7 +133,7 @@ async function chatTurn(ctx, store, desk, body) {
     }
   } catch {
     notice = outageNotice(ctx, wasDown, tr('先用本地规则处理'))
-    plan = localIntent(snapshot, message, { focusId })
+    plan = stage ? { reply: tr('当前模型不可用，无法继续创作讨论。请在设置中连接模型后重试；你的灵感、大纲和稿件已保留。'), ops: [], actions: [] } : localIntent(snapshot, message, { focusId })
   }
   const settings = await desk.settings.read()
   const canDraw = desk.producer.ready(settings)
@@ -133,7 +142,8 @@ async function chatTurn(ctx, store, desk, body) {
     const target = focusId ? draft.items.find(row => row.id === focusId) : null
     const production = target?.production?.status === 'done' ? target.production : null
     // 本地规则只会改灵感标题；有成稿时要改的是成稿标题
-    const ops = (Array.isArray(plan.ops) ? plan.ops : []).map((op) => {
+    const ops = (Array.isArray(plan.ops) ? plan.ops : []).filter(op => !stage || op && ['update_planning', 'update_production'].includes(op.op) && op.id === focusId).map((op) => {
+      if (op?.op === 'update_planning' && op.id === focusId) return { ...op, revision: snapshot.items.find(row => row.id === focusId)?.workspace?.revision || 0 }
       if (production && op?.op === 'update_item' && op.id === focusId && typeof op.title === 'string') return { op: 'update_production', id: focusId, title: op.title }
       return op
     })
@@ -141,7 +151,7 @@ async function chatTurn(ctx, store, desk, body) {
     let targets = []
     if (production && plan.revise) {
       // 没接生图时，图不会重画，回执要说实话
-      const revision = applyRevision(production, plan.revise, { canDraw })
+      const revision = applyRevision(production, stage ? Object.fromEntries(Object.entries(plan.revise).filter(([key]) => ['title', 'description', 'topics', 'article', 'edits'].includes(key))) : plan.revise, { canDraw: !stage && canDraw })
       receipts.push(...revision.receipts.map(text => ({ text })))
       errors.push(...revision.errors)
       targets = canDraw ? revision.targets : []
@@ -154,7 +164,7 @@ async function chatTurn(ctx, store, desk, body) {
     const itemId = focusId ?? undefined
     // 已经做好的成稿不会因为一句话被整篇重做，要重做请点「重新成稿」
     const actions = (Array.isArray(plan.actions) ? plan.actions : [])
-      .filter(a => a && ['produce', 'open', 'nav'].includes(a.type))
+      .filter(a => !stage && a && ['produce', 'open', 'nav'].includes(a.type))
       .filter(a => !(a.type === 'produce' && (done && a.id === focusId || draft.items.find(row => row.id === a.id)?.production?.status === 'done')))
     draft.chat.push({ id: newId('c'), at, role: 'user', text: message, itemId })
     const answer = { id: newId('c'), at, role: 'assistant', text: plan.reply, receipts, errors, engine, notice, undoable: receipts.length > 0, itemId }
@@ -239,11 +249,17 @@ async function importAccountRoute(ctx, store, desk, body) {
 }
 
 async function addFromUrl(ctx, store, body) {
-  const url = String(body.url || '').trim()
-  const info = await harvest(url)
+  const shared = parseSharedLink(body.url)
+  const url = shared.url
+  const parsed = new URL(url)
+  const info = body.metadata === false ? { url: parsed.href, title: parsed.href, description: '', siteName: parsed.hostname } : await harvest(url)
+  const kind = sourceKind({ kind: 'web', url: info.url })
+  const originalKind = sourceKind({ kind: 'web', url })
+  const resolvedKind = kind === 'web' ? originalKind : kind
+  const direct = /\.(mp4|webm|mov|png|jpe?g|webp|gif)$/i.test(new URL(info.url).pathname)
   const op = {
-    op: 'add_item', kind: 'web', title: body.title || info.title || url, body: body.note || info.description || '', url: info.url, source: info.siteName, tags: Array.isArray(body.tags) ? body.tags : [],
-    media: info.image ? { src: info.image } : null,
+    op: 'add_item', kind: resolvedKind, title: body.title || (info.title && info.title !== url ? info.title : shared.text?.split(/https?:/)[0].trim().slice(0, 100)) || info.title || url, body: [body.note || info.description || '', shared.text].filter(Boolean).join('\n\n'), url: info.url, source: info.siteName, tags: Array.isArray(body.tags) ? body.tags : [],
+    media: direct ? { src: info.url, ...(info.image ? { poster: info.image } : {}) } : info.image ? { src: info.image } : null,
   }
   return store.mutate(tr('收藏《{title}》', { title: op.title.slice(0, 12) }), (draft) => {
     const { receipts, errors } = applyOps(draft, [op])
@@ -279,10 +295,17 @@ async function handleUpload(req, store, res) {
   return json(res, 200, { src: `media-desk/files/${name}`, kind: type.startsWith('video/') ? 'video' : 'image' })
 }
 
-async function route(ctx, store, desk, req, res) {
+export async function route(ctx, store, desk, req, res) {
   const url = new URL(req.url || '/', 'http://local')
   const path = url.pathname.replace(/^\/media-desk\/?/, '')
   const method = req.method || 'GET'
+
+  if (method === 'GET' && path.startsWith('feishu/')) {
+    const sync = desk.feishu ??= new FeishuSync(store)
+    if (path === 'feishu/config') return json(res, 200, sync.config.public(await sync.config.read()))
+    if (path === 'feishu/job') return json(res, 200, sync.job(url.searchParams.get('id')))
+    return json(res, 404, { error: '接口不存在' })
+  }
 
   if ((method === 'GET' || method === 'HEAD') && path.startsWith('assets/')) {
     const name = path.slice('assets/'.length)
@@ -291,11 +314,12 @@ async function route(ctx, store, desk, req, res) {
   }
   if ((method === 'GET' || method === 'HEAD') && path.startsWith('files/')) {
     const name = path.slice('files/'.length)
-    if (!/^[\w.-]+$/.test(name)) return json(res, 400, { error: tr('路径无效') })
+    if (!validAssetPath(name)) return json(res, 400, { error: tr('路径无效') })
     await store.read()
-    return sendFile(req, res, join(store.filesDir, name))
+    return sendFile(req, res, await storedAssetPath(store.filesDir, name))
   }
   if (method === 'GET') {
+    if (path === 'workspace') return json(res, 200, { workspace: await (desk.assets ??= new ContentAssets(store)).read(url.searchParams.get('id')) })
     if (path === 'state') {
       if (!desk.settled) { desk.settled = true; await desk.producer.settleAll().catch(() => {}) }
       let state = await store.read()
@@ -308,9 +332,9 @@ async function route(ctx, store, desk, req, res) {
       await desk.producer.settle(id)
       const state = await store.read()
       const item = state.items.find(row => row.id === id)
-      return json(res, 200, { production: item?.production ?? null, status: item?.status, live: desk.producer.status(id) })
+      return json(res, 200, { production: item?.production ?? null, workspace: item?.workspace, status: item?.status, live: desk.producer.status(id) })
     }
-    if (path === 'settings') return json(res, 200, { ...publicSettings(await desk.settings.read(), Boolean(imageTool(ctx))), defaultExportDir: defaultExportDir() })
+    if (path === 'settings') { await store.read(); return json(res, 200, { ...publicSettings(await desk.settings.read(), Boolean(imageTool(ctx))), documentDir: store.root, defaultExportDir: defaultExportDir() }) }
     if (path === 'models') {
       // 列出 Harness 里已接的提供方和它们公布的模型，给工作台的助手模型选择器用
       const llm = ctx.get('llm')
@@ -336,8 +360,22 @@ async function route(ctx, store, desk, req, res) {
   if (site && site !== 'same-origin' && site !== 'none') return json(res, 403, { error: tr('拒绝跨站请求') })
 
   if (path === 'upload') return handleUpload(req, store, res)
+  if (path === 'content-assets/import') {
+    const result = await (desk.assets ??= new ContentAssets(store)).import(url.searchParams.get('id'), req, { name: url.searchParams.get('name'), folder: url.searchParams.get('folder') || '', relativePath: url.searchParams.get('relativePath') || '', revision: Number(url.searchParams.get('revision')) })
+    return json(res, 200, result)
+  }
   const body = await readJson(req)
   switch (path) {
+    case 'feishu/config': return json(res, 200, await (desk.feishu ??= new FeishuSync(store)).config.save(body))
+    case 'feishu/test': return json(res, 200, await (desk.feishu ??= new FeishuSync(store)).test())
+    case 'feishu/preview': return json(res, 200, await (desk.feishu ??= new FeishuSync(store)).preview(body.id))
+    case 'feishu/sync': return json(res, 202, (desk.feishu ??= new FeishuSync(store)).start(body))
+    case 'cover/titles': return json(res, 200, await coverPromptAction(ctx, store, desk, { ...body, titles: true }))
+    case 'cover/prompts': return json(res, 200, await coverPromptAction(ctx, store, desk, body))
+    case 'cover/image': return json(res, 200, await coverImageAction(ctx, store, desk, body))
+    case 'workspace/save': return json(res, 200, { workspace: await (desk.assets ??= new ContentAssets(store)).save(body.id, body.revision, body.draft) })
+    case 'content-assets/trash':
+    case 'content-assets/restore': return json(res, 200, { workspace: await (desk.assets ??= new ContentAssets(store)).recycle(body.id, body.revision, body.assetId, path.endsWith('/restore')) })
     case 'ops': {
       const label = typeof body.label === 'string' ? body.label : tr('操作')
       const result = await store.mutate(label, (draft) => {
@@ -398,13 +436,21 @@ async function route(ctx, store, desk, req, res) {
     case 'style/extract': return json(res, 200, await extractStyle(ctx, store, body))
     case 'monid/import': return json(res, 200, await importAccountRoute(ctx, store, desk, body))
     case 'settings': {
+      await store.read()
       const before = modelInfo(ctx)
-      const updated = await desk.settings.update(body)
+      await desk.settings.update(body, { validateOnly: true })
+      let storage = null
+      if (body.documentDir && body.documentDir.trim() !== store.root) {
+        if (desk.producer?.jobs?.size || desk.producer?.assets?.size || [...(desk.feishu?.jobs?.values() || [])].some(job => job.status === 'running')) throw Object.assign(new Error('有生成或同步任务正在进行，请完成后再更换目录'), { status: 409 })
+        storage = await relocateStorage(store, body.documentDir, { settingsPatch: body })
+      }
+      const updated = storage?.moved ? await desk.settings.read() : await desk.settings.update(body)
+      await store.run(async () => { await store.refresh(); await store.cleanupTrash(true) })
       setAssistantModel(updated.assistant)
       const after = modelInfo(ctx)
       // 换了模型，上一个模型的失败状态不再算数
       if (before?.provider !== after?.provider || before?.model !== after?.model) Object.assign(modelStatus, { ok: null, error: null })
-      return json(res, 200, { ...publicSettings(updated, Boolean(imageTool(ctx))), defaultExportDir: defaultExportDir(), assistantEffective: modelInfo(ctx)?.label ?? null })
+      return json(res, 200, { ...publicSettings(updated, Boolean(imageTool(ctx))), documentDir: store.root, storage, defaultExportDir: defaultExportDir(), assistantEffective: modelInfo(ctx)?.label ?? null })
     }
     case 'settings/test': {
       const settings = await desk.settings.read()
@@ -455,13 +501,13 @@ export function requestRejection(ctx, req) {
   return connection.requestRejection({ headers: req.headers })
 }
 
-export const name = 'dsh-media-desk'
+export const name = PACKAGE_NAME
 
 export default {
   inject: ['webServer', 'connection'],
   apply(ctx) {
     const store = new Store()
-    const settings = new Settings(store.root)
+    const settings = new Settings(store)
     const producer = new Producer({
       store, settings, callText: options => callModel(ctx, options),
       ready: saved => imageReady(saved, Boolean(imageTool(ctx))),
@@ -469,6 +515,11 @@ export default {
     })
     const monid = createMonidRunner()
     const desk = { settings, producer, monid }
+    ctx.effect(() => {
+      const timer = setInterval(() => store.read().catch(err => console.error('回收站清理失败：', err.message)), 3600000)
+      timer.unref?.()
+      return () => clearInterval(timer)
+    })
     // 启动时恢复用户在工作台里选过的助手模型
     settings.read().then(saved => setAssistantModel(saved.assistant)).catch(() => {})
     ctx.effect(() => ctx.webServer.register({
@@ -490,6 +541,6 @@ export default {
           json(res, err.status || 500, { error: err.message })
         }
       },
-    }), 'dsh-media-desk: /media-desk routes')
+    }), 'prompthub-media-desk: /media-desk routes')
   },
 }

@@ -1,4 +1,5 @@
-// dsh-media-desk 浏览器半片：侧栏入口 + main 全局面板。
+// PromptHub MediaDesk 浏览器半片：侧栏入口 + main 全局面板。
+import { BRAND_NAME } from '../src/brand.js'
 import React from 'react'
 import { HomeView } from './canvas.jsx'
 import { ChatDock } from './chat.jsx'
@@ -11,6 +12,7 @@ import { ModelButton, ModelPicker } from './modelpick.jsx'
 import { SettingsDialog } from './settings.jsx'
 import { Studio } from './studio.jsx'
 import css from './styles.css'
+import workspaceCss from './content-workspace.css'
 import { lang, subscribeLang, t, useLang } from './i18n.js'
 import { Dialog, FormDialog, Icon, IconButton, Toast } from './ui.jsx'
 
@@ -33,56 +35,79 @@ function CaptureDialog() {
   const [text, setText] = React.useState('')
   const [url, setUrl] = React.useState('')
   const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState('')
+  const [metadata, setMetadata] = React.useState(true)
   const fileInput = React.useRef(null)
   React.useEffect(() => {
     if (!capture) return
     setTab(capture.tab ?? 'text')
     setText('')
     setUrl('')
+    setError('')
+    setMetadata(true)
   }, [capture])
   if (!capture) return null
   const close = () => setDesk({ capture: null })
   const save = async (event) => {
     event.preventDefault()
+    if (busy) return
     setBusy(true)
-    if (tab === 'link' && url.trim()) {
-      const id = await captureUrl(url.trim())
-      if (id) close()
-    } else if (tab === 'quote' || tab === 'text') {
-      const value = text.trim()
-      if (value) {
-        await dispatchOps([{ op: 'add_item', kind: tab === 'quote' ? 'quote' : 'note', title: tab === 'quote' ? value : value.split(/[。！？\n]|[.!?](?=\s|$)/)[0].slice(0, 40), body: tab === 'quote' ? '' : value }], { label: t('记下灵感') })
+    setError('')
+    try {
+      if (tab === 'link' && url.trim()) {
+        const id = await captureUrl(url.trim(), { metadata }, { throwOnError: true })
+        if (!id) throw new Error(t('保存链接失败'))
         close()
+      } else if (tab === 'quote' || tab === 'text') {
+        const value = text.trim()
+        if (value) {
+          const result = await dispatchOps([{ op: 'add_item', kind: tab === 'quote' ? 'quote' : 'note', title: tab === 'quote' ? value : value.split(/[。！？\n]|[.!?](?=\s|$)/)[0].slice(0, 40), body: value }], { label: t('记下灵感') })
+          if (!result || result.errors?.length) throw new Error(result?.errors?.[0] || t('保存灵感失败'))
+          close()
+        }
       }
-    }
-    setBusy(false)
+    } catch (err) { setError(err.message) }
+    finally { setBusy(false) }
+  }
+  const saveFiles = async event => {
+    const files = [...event.target.files]
+    event.target.value = ''
+    if (!files.length || busy) return
+    setBusy(true)
+    setError('')
+    try {
+      const result = await captureFiles(files)
+      if (result.failed.length) setError(result.failed.map(row => `${row.name}：${row.error}`).join('\n'))
+      else close()
+    } catch (err) { setError(err.message) }
+    finally { setBusy(false) }
   }
   const tabs = [['text', t('笔记')], ['quote', t('金句')], ['link', t('链接')], ['file', t('图片/视频')]]
   return (
     <Dialog title={t('记下一个灵感')} onClose={close} width={480}>
       <div className="md-capture-tabs" role="tablist">
-        {tabs.map(([id, label]) => <button type="button" role="tab" key={id} aria-selected={tab === id} className={tab === id ? 'is-on' : ''} onClick={() => setTab(id)}>{label}</button>)}
+        {tabs.map(([id, label]) => <button type="button" role="tab" key={id} aria-selected={tab === id} className={tab === id ? 'is-on' : ''} disabled={busy} onClick={() => { setTab(id); setError('') }}>{label}</button>)}
       </div>
       <form className="md-form" onSubmit={save}>
         {tab === 'link' ? (
           <label className="md-field">
             <span>{t('链接')}</span>
-            <input type="url" required value={url} onChange={e => setUrl(e.target.value)} placeholder="https://" />
-            <small>{t('会自动读取页面的标题、简介和封面。')}</small>
+            <textarea rows={3} required value={url} onChange={e => setUrl(e.target.value)} placeholder={t('粘贴网址，或抖音等平台的整段分享文案')} />
+            <small>{t('自动读取公开网页的标题、简介和封面。本机地址或需要登录的页面，可关闭自动读取，仅保存链接。')}</small><span className="md-capture-metadata"><input type="checkbox" checked={metadata} onChange={e => setMetadata(e.target.checked)} />{t('自动读取网页信息')}</span>
           </label>
         ) : tab === 'file' ? (
-          <button type="button" className="md-dropzone" onClick={() => fileInput.current?.click()}>
+          <><button type="button" disabled={busy} className="md-dropzone" onClick={() => fileInput.current?.click()}>
             <Icon name="upload" size={22} />
-            <span>{t('选择图片或视频')}</span>
+            <span>{t(busy ? '正在导入…' : '选择图片或视频')}</span>
             <small>{t('也可以直接把文件拖到灵感墙上')}</small>
-            <input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" onChange={async (e) => { const files = [...e.target.files]; close(); await captureFiles(files) }} />
-          </button>
+          </button><input ref={fileInput} type="file" hidden multiple accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime" onChange={saveFiles} /></>
         ) : (
           <label className="md-field">
             <span>{tab === 'quote' ? t('这句话') : t('想法')}</span>
             <textarea rows={4} required value={text} onChange={e => setText(e.target.value)} placeholder={tab === 'quote' ? t('好的选题不是想出来的……') : t('想到什么就写什么，之后再让助手补全。')} />
           </label>
         )}
+        {error ? <p className="md-capture-error" role="alert">{error}{tab === 'link' && metadata ? <span>{t('可关闭“自动读取网页信息”后重试，仅保存链接。')}</span> : null}</p> : null}
         {tab === 'file' ? null : (
           <div className="md-form-foot">
             <span style={{ flex: 1 }} />
@@ -110,7 +135,7 @@ function SampleBadge() {
   )
 }
 
-function Desk() {
+export function Desk() {
   // 切换语言时整棵树重新渲染
   useLang()
   const ready = useDesk(s => Boolean(s.state))
@@ -153,9 +178,11 @@ function Desk() {
   return (
     <div className={`md-root ${narrow ? 'is-narrow' : ''} ${width < 780 ? 'is-compact' : ''} ${showDock ? 'has-dock' : ''}`} ref={rootRef}>
       <style>{css}</style>
+      <style>{workspaceCss}</style>
       <div className="md-ambient" aria-hidden="true"><i /><i /><i /></div>
       <div className="md-main">
         <header className="md-topbar" data-window-drag="">
+          <div className="md-brand" title={BRAND_NAME} aria-label={BRAND_NAME}><span>PromptHub</span><strong>MediaDesk</strong></div>
           <nav className="md-nav" aria-label={t('工作台导航')}>
             {NAV.map(entry => (
               <button type="button" key={entry.id} className={view === entry.id ? 'is-on' : ''} aria-current={view === entry.id ? 'page' : undefined} onClick={() => setDesk({ view: entry.id, focusId: null })}>{entry.navKey && lang() === 'en' ? t(entry.navKey) : t(entry.label)}</button>
@@ -202,11 +229,11 @@ export function apply(ctx) {
         name: 'sidebar.panellist',
         id: PANEL_ID,
         order: 5,
-        label: () => t('自媒体工作台'),
+        label: () => BRAND_NAME,
       }, PanelIcon))
     }
     mount()
     const off = subscribeLang(mount)
     return () => { off(); release?.() }
-  }, 'dsh-media-desk: sidebar entry')
+  }, 'prompthub-media-desk: sidebar entry')
 }

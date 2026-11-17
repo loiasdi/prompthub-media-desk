@@ -1,3 +1,4 @@
+import { contentAssetDirectory } from './asset-storage.js'
 // 一键成稿流水线：文章 → 标题与画面规划 → 封面、配图、分镜。
 // 任务在 Host 里跑，关掉页面也不会中断；每生成一张图就落盘一次。
 import { writeFile } from 'node:fs/promises'
@@ -29,6 +30,8 @@ export function normalizePlan(plan, settings, title) {
   })).filter(row => row.prompt || row.visual)
   return {
     title: text(plan?.title, 60) || title,
+    description: text(plan?.description, 10000),
+    topics: Array.isArray(plan?.topics) ? plan.topics.filter(tag => typeof tag === 'string').slice(0, 10).map(tag => tag.startsWith('#') ? tag : `#${tag}`).join(' ').slice(0, 10000) : text(plan?.topics, 10000),
     coverText: text(plan?.coverText, 24) || shortCoverText(title),
     facts: (Array.isArray(plan?.facts) ? plan.facts : []).map(row => text(row, 120)).filter(Boolean).slice(0, 8),
     outline: (Array.isArray(plan?.outline) ? plan.outline : []).map(row => text(row, 40)).filter(Boolean).slice(0, 6),
@@ -76,6 +79,12 @@ export function applyRevision(production, revise, { canDraw = true } = {}) {
   if (title && title !== production.title) {
     production.title = title
     receipts.push(tr('标题改成《{title}》', { title }))
+  }
+  for (const [field, label] of [['description', '描述'], ['topics', '话题']]) {
+    if (typeof revise?.[field] === 'string' && revise[field] !== production[field]) {
+      production[field] = revise[field].slice(0, 10000)
+      receipts.push(tr('已更新{field}', { field: tr(label) }))
+    }
   }
   const coverText = text(revise?.coverText, 24)
   if (coverText && coverText !== production.coverText) {
@@ -225,6 +234,8 @@ export class Producer {
       await this.patch(id, (production) => {
         production.stage = 'making'
         production.title = plan.title
+        production.description = plan.description
+        production.topics = plan.topics
         production.coverText = plan.coverText
         production.facts = plan.facts
         production.outline = plan.outline
@@ -328,12 +339,12 @@ export class Producer {
     try {
       const { buffer, ext } = await this.generateWithRetry(settings.image, prompt, signal)
       const name = `${newId('g')}${ext}`
-      await writeFile(join(this.store.filesDir, name), buffer)
+      await writeFile(join(await contentAssetDirectory(this.store.root, id), name), buffer)
       await this.patch(id, (production) => {
         const asset = assetAt(production, target)
         if (!asset) return
         asset.status = 'done'
-        asset.src = `media-desk/files/${name}`
+        asset.src = `media-desk/files/${id}/${name}`
       })
     } catch (err) {
       if (signal?.aborted) return

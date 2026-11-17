@@ -1,5 +1,6 @@
 // 工作台的唯一写入口：对话、界面操作都走这里，统一校验字段并产出回执。
 // 模型输出也是不可信输入，所以这里只放行白名单字段。
+import { emptyWorkspace } from './workspace-schema.js'
 import { currentLang, platformName, tr } from './i18n.js'
 
 export const STATUSES = ['idea', 'outline', 'draft', 'ready', 'published']
@@ -14,7 +15,7 @@ export function statusLabel(status) {
 
 const ITEM_FIELDS = {
   title: 'text', body: 'text', kind: 'kind', url: 'url', source: 'text', tags: 'list', status: 'status', angleId: 'id',
-  personaIds: 'list', parentId: 'id', rel: 'text', scheduledAt: 'date', platform: 'platform', pinned: 'bool', media: 'media', pos: 'pos', score: 'num',
+  personaIds: 'list', parentId: 'id', rel: 'text', scheduledAt: 'date', platform: 'platform', pinned: 'bool', media: 'media', mediaItems: 'mediaItems', pos: 'pos', score: 'num',
 }
 const PERSON_FIELDS = { name: 'text', role: 'text', note: 'text', traits: 'list', tone: 'num' }
 const ANGLE_FIELDS = { name: 'text', hook: 'text', prompt: 'text' }
@@ -51,6 +52,10 @@ function coerce(type, value) {
     case 'url': return value === null || value === '' ? null : isHttpUrl(value) ? value : undefined
     case 'date': return value === null ? null : typeof value === 'string' && !Number.isNaN(Date.parse(value)) ? new Date(value).toISOString() : undefined
     case 'pos': return value && [value.x, value.y].every(Number.isFinite) ? { x: value.x, y: value.y, r: Number.isFinite(value.r) ? value.r : 0 } : undefined
+    case 'mediaItems': return Array.isArray(value) ? [...new Map(value.slice(0, 100).map(row => {
+      const media = coerce('media', row)
+      return media ? [media.src, { ...media, kind: row.kind === 'video' ? 'video' : 'image', name: typeof row.name === 'string' ? row.name.slice(0, 240) : '' }] : null
+    }).filter(Boolean)).values()] : undefined
     case 'media': {
       if (value === null) return null
       if (!value || typeof value.src !== 'string') return undefined
@@ -177,12 +182,25 @@ const handlers = {
     if (['idea', 'outline'].includes(item.status)) item.status = 'draft'
     return { text: tr(format === 'script' ? '保存《{title}》的脚本' : '保存《{title}》的文章', { title: short(item.title) }), target: item.id, kind: 'item' }
   },
+  update_planning(state, op) {
+    const item = findById(state.items, op.id)
+    if (!['ideaText', 'outlineText'].includes(op.field) || typeof op.text !== 'string' || op.text.length > 200000) throw new Error(tr('灵感或大纲内容无效'))
+    const ws = item.workspace || emptyWorkspace(item)
+    if (!Number.isInteger(op.revision) || op.revision !== ws.revision) throw new Error(tr('灵感或大纲已更新，请基于最新内容重新讨论'))
+    item.workspace = { ...ws, [op.field]: op.text, revision: ws.revision + 1 }
+    return { text: tr(op.field === 'outlineText' ? '已保存讨论后的大纲' : '已保存补充后的灵感'), target: item.id, kind: 'item' }
+  },
   update_production(state, op) {
     const item = findById(state.items, op.id)
-    if (!item.production) throw new Error(tr('这条灵感还没有成稿'))
+    if (!item.production) item.production = { status: 'done', title: item.title, article: item.body || '', description: '', topics: (item.tags || []).map(tag => tag.startsWith('#') ? tag : `#${tag}`).join(' ') }
     if (typeof op.title === 'string') item.production.title = op.title.slice(0, 200)
     if (typeof op.coverText === 'string') item.production.coverText = op.coverText.slice(0, 40)
-    if (typeof op.article === 'string') item.production.article = op.article.slice(0, 200000)
+    if (typeof op.description === 'string') item.production.description = op.description.slice(0, 10000)
+    if (typeof op.topics === 'string') item.production.topics = op.topics.slice(0, 10000)
+    if (typeof op.article === 'string') {
+      item.production.article = op.article.slice(0, 200000)
+      if (op.article.trim() && ['idea', 'outline'].includes(item.status)) item.status = 'draft'
+    }
     return { text: tr('修改《{title}》', { title: short(item.production.title) }), target: item.id, kind: 'item' }
   },
   add_person(state, op, now) {

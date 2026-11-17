@@ -7,7 +7,7 @@ const BASE = 'media-desk/'
 
 let snapshot = {
   state: null, model: null, modelOk: null, modelError: null, canUndo: false, error: null,
-  view: 'home', mode: 'scatter', focusId: null, sheetOrigin: null, dockOpen: true, studioDock: false, chatQuote: null, query: '', kindFilter: 'all', related: null,
+  view: 'home', mode: 'scatter', focusId: null, studioTab: 'article', sheetOrigin: null, dockOpen: true, studioDock: false, chatQuote: null, query: '', kindFilter: 'all', related: null,
   live: {}, settings: null, settingsOpen: false, modelPickOpen: false, thinking: false, toast: null, capture: null, dialog: null,
 }
 const listeners = new Set()
@@ -85,8 +85,10 @@ export async function undo() {
   }
 }
 
-export function openItem(id, origin = null) {
-  setDesk({ focusId: id, sheetOrigin: origin })
+export function openItem(id, origin = null, tab = null) {
+  const item = getDesk().state?.items.find(row => row.id === id)
+  tab ||= item?.status === 'idea' ? 'idea' : item?.status === 'outline' ? 'outline' : 'article'
+  setDesk({ focusId: id, sheetOrigin: origin, studioTab: tab })
 }
 
 export function closeItem() {
@@ -120,8 +122,8 @@ export async function regenAsset(id, target) {
   }
 }
 
-function mergeProduction(id, production, status) {
-  setDesk(s => ({ state: { ...s.state, items: s.state.items.map(item => (item.id === id ? { ...item, production, ...(status ? { status } : {}) } : item)) } }))
+function mergeProduction(id, production, status, workspace) {
+  setDesk(s => ({ state: { ...s.state, items: s.state.items.map(item => (item.id === id ? { ...item, production, ...(status ? { status } : {}), ...(workspace ? { workspace } : {}) } : item)) } }))
 }
 
 /** 轮询进度，返回停止函数。 */
@@ -133,7 +135,7 @@ export function watchProduction(id) {
         const data = await request(`production?id=${encodeURIComponent(id)}`)
         if (stopped) return
         setDesk(s => ({ live: { ...s.live, [id]: data.live } }))
-        if (data.production) mergeProduction(id, data.production, data.status)
+        if (data.production) mergeProduction(id, data.production, data.status, data.workspace)
       } catch {
         // 连接抖动时下一轮再试
       }
@@ -199,7 +201,7 @@ function runActions(actions) {
 }
 
 export async function sendChat(text) {
-  const { chatQuote: quote, focusId } = snapshot
+  const { chatQuote: quote, focusId, studioTab } = snapshot
   // 选中的段落或某一镜，随消息一起交给模型
   const message = quote ? (quote.text ? t('关于{label}「{quote}」：{text}', { label: quote.label, quote: quote.text, text }) : t('关于{label}：{text}', { label: quote.label, text })) : text
   setDesk(s => ({
@@ -208,7 +210,8 @@ export async function sendChat(text) {
     state: { ...s.state, chat: [...s.state.chat, { id: `tmp_${Date.now()}`, role: 'user', text: message, itemId: focusId ?? undefined }] },
   }))
   try {
-    const data = await request('chat', { message, focusId: focusId ?? undefined })
+    if (focusId) await (await import('./workspace.js')).flushWorkspace(focusId)
+    const data = await request('chat', { message, focusId: focusId ?? undefined, stage: focusId && ['idea', 'outline', 'article'].includes(studioTab) ? studioTab : undefined })
     setDesk({ state: data.state, canUndo: true, modelOk: data.modelOk, modelError: data.modelError })
     runActions(data.actions || [])
   } catch (err) {
@@ -249,13 +252,14 @@ export async function clearChat() {
   }
 }
 
-export async function captureUrl(url, extra = {}) {
+export async function captureUrl(url, extra = {}, { throwOnError = false } = {}) {
   try {
     const data = await request('capture-url', { url, ...extra })
     setDesk({ state: data.state, canUndo: true })
     toast(t('已收藏到灵感墙'), { undo: true })
     return data.id
   } catch (err) {
+    if (throwOnError) throw err
     report(err)
     return null
   }
@@ -269,16 +273,35 @@ export async function uploadFile(file) {
 }
 
 export async function captureFiles(files) {
+  const result = { added: 0, failed: [] }
+  if (files.length > 100) {
+    const error = t('每条灵感最多添加 100 个素材，请减少选择后重试')
+    toast(error, { error: true })
+    return { added: 0, failed: [{ name: '', error }] }
+  }
+  const mediaItems = []
   for (const file of files) {
     try {
       const { src, kind } = await uploadFile(file)
-      const title = file.name.replace(/\.[^.]+$/, '')
-      await dispatchOps([{ op: 'add_item', kind, title, media: { src } }], { label: t('收藏 {title}', { title }), silent: true })
-      toast(t('已放到灵感墙'), { undo: true })
+      mediaItems.push({ src, kind, name: file.name })
     } catch (err) {
+      result.failed.push({ name: file.name, error: err.message })
       report(err)
     }
   }
+  if (mediaItems.length) {
+    const first = mediaItems[0]
+    const title = first.name.replace(/\.[^.]+$/, '')
+    const saved = await dispatchOps([{ op: 'add_item', kind: first.kind, title, media: { src: first.src }, mediaItems }], { label: t('记下灵感'), silent: true })
+    if (!saved || saved.errors?.length) {
+      const error = saved?.errors?.[0] || t('保存灵感失败')
+      result.failed.push(...mediaItems.map(row => ({ name: row.name, error })))
+    } else {
+      result.added = mediaItems.length
+      toast(t('已放到灵感墙'), { undo: true })
+    }
+  }
+  return result
 }
 
 export async function refreshAccount(payload) {
