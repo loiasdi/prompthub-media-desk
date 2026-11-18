@@ -77,6 +77,8 @@ AI 生成和自动发布按钮暂时禁用。目标模型选项用于预览配�
 
 完整设计见 [内容级视频提示词、素材管理与自动发布方案](content-video-assets-publishing-plan.md)。
 
+本地直发的具体实施见 [B 站](local-bilibili-publishing-plan.md) 和 [YouTube](local-youtube-publishing-plan.md)；目前仅适配器，未接入发布按钮。
+
 ## 封面 Skill 工作流
 
 封面页内置 `src/skills/atutun-xhs-cover.md`（来自用户提供的 Skill）。单页选择参考图、填写封面文字和选填的补充要求；风格、用色、人物分类和比例收在“更多设置”。新建任务默认生成 3:4、16:9、4:3 三种比例，已有任务保留原比例。用户本次要求优先于 Skill 默认规则。不要求手动分类参考图，由模型判断用途；仅使用参考图已有的人物，不凭空添加人物。
