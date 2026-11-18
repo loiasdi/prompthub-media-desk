@@ -68,7 +68,7 @@ export function ContentWorkspace({ item, children }) {
   return (
     <div className="md-content-workspace">
       {feishuOpen ? <FeishuSyncDialog item={item} onClose={() => setFeishuOpen(false)} /> : null}
-      <header className="md-workspace-header">
+      <header className="md-workspace-header" data-window-drag="">
         <div className="md-workspace-title"><IconButton icon="chevL" label={t('返回内容')} onClick={closeItem} /><div><span title={t('内容档案')}>{BRAND_NAME}</span><h1 title={title}>{title}</h1></div></div>
         <div className="md-workspace-tools">
           <label className="md-workspace-status"><span>{t('状态')}</span><select aria-label={t('内容状态')} value={item.status || 'idea'} disabled={item.production?.status === 'running'} onChange={e => changeStatus(e.target.value)}>{STATUSES.map(status => <option value={status} key={status}>{t(STATUS_LABEL[status])}</option>)}</select></label>

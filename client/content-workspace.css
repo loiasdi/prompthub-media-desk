@@ -269,7 +269,7 @@
 .md-editor .md-workspace-nav [role=tab].is-on { background: var(--active); }
 .md-editor .md-workspace-nav [role=tab] > span { margin-left: auto; }
 .md-editor .md-workspace-nav [role=tab]:focus-visible { outline: 2px solid var(--ink3); outline-offset: 2px; }
-.md-editor .md-workspace-header { height: 56px; padding: 8px 20px; }
+.md-editor .md-workspace-header { height: 56px; padding: 8px 20px 8px max(20px, var(--dsh-frame-leading-clearance, 0px)); }
 .md-editor .md-workspace-title > .md-icon-btn { display: inline-flex; }
 .md-editor .md-workspace-title h1 { font-size: 13px; font-weight: 500; max-width: 520px; }
 .md-editor .md-workspace-title > div > span { font-size: 10px; }
@@ -434,7 +434,7 @@
 }
 @media (max-width: 760px) {
   .md-editor .md-content-workspace { --workspace-gutter: 12px; grid-template-columns: 120px minmax(0, 1fr); }
-  .md-editor .md-workspace-header { padding: 8px 12px; }
+  .md-editor .md-workspace-header { padding: 8px 12px 8px max(12px, var(--dsh-frame-leading-clearance, 0px)); }
   .md-editor .md-workspace-title h1 { max-width: 180px; }
   .md-editor .md-workspace-tools .md-btn { padding: 0 8px; font-size: 11px; }
 }

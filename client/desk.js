@@ -7,7 +7,7 @@ const BASE = 'media-desk/'
 
 let snapshot = {
   state: null, model: null, modelOk: null, modelError: null, canUndo: false, error: null,
-  view: 'home', mode: 'scatter', focusId: null, studioTab: 'article', sheetOrigin: null, dockOpen: true, studioDock: false, chatQuote: null, query: '', kindFilter: 'all', related: null,
+  view: 'home', mode: 'scatter', focusId: null, studioTab: 'article', dockOpen: true, studioDock: false, chatQuote: null, query: '', kindFilter: 'all', related: null,
   live: {}, settings: null, settingsOpen: false, modelPickOpen: false, thinking: false, toast: null, capture: null, dialog: null,
 }
 const listeners = new Set()
@@ -85,14 +85,14 @@ export async function undo() {
   }
 }
 
-export function openItem(id, origin = null, tab = null) {
+export function openItem(id, tab = null) {
   const item = getDesk().state?.items.find(row => row.id === id)
   tab ||= item?.status === 'idea' ? 'idea' : item?.status === 'outline' ? 'outline' : 'article'
-  setDesk({ focusId: id, sheetOrigin: origin, studioTab: tab })
+  setDesk({ focusId: id, studioTab: tab })
 }
 
 export function closeItem() {
-  setDesk({ focusId: null, sheetOrigin: null, studioDock: false, chatQuote: null })
+  setDesk({ focusId: null, studioDock: false, chatQuote: null })
 }
 
 /** 一键成稿。任务在 Host 里跑，这里只负责启动和看进度。 */

@@ -44,6 +44,7 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
   const timers = new Map()
   const queues = new Map()
   const controllers = new Map()
+  const checkedAssets = new Map()
   const emit = () => listeners.forEach(fn => fn())
   const set = (id, changes) => { entries.set(id, { ...entries.get(id), ...changes }); emit() }
   const get = item => {
@@ -61,11 +62,17 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
       }
     }
     // 生成结果的登记不改变可编辑草稿的修订号，仍需持续接收并保留每一版文件。
-    const assets = mergeAssets(entry.draft.assets, item.workspace?.revision >= entry.revision ? item.workspace.assets : [], sourceAssets(item))
+    // React 会为同一次键入多次读取快照。只在素材输入真正改变时合并、比较。
+    const registered = item.workspace?.revision >= entry.revision ? item.workspace.assets : undefined
+    const inputs = [registered, item.production?.cover, item.production?.images, item.production?.shots, item.mediaItems, item.media, item.title, item.sample]
+    const checked = checkedAssets.get(item.id)
+    if (checked?.assets === entry.draft.assets && inputs.every((value, index) => value === checked.inputs[index])) return entry
+    const assets = mergeAssets(entry.draft.assets, registered || [], sourceAssets(item))
     if (JSON.stringify(assets) !== JSON.stringify(entry.draft.assets)) {
       entry = { ...entry, draft: { ...entry.draft, assets } }
       entries.set(item.id, entry)
     }
+    checkedAssets.set(item.id, { assets: entry.draft.assets, inputs })
     return entry
   }
   const enqueue = (id, run) => {

@@ -14,8 +14,10 @@ const refs = (value, available) => [...new Set(list(value).filter(id => typeof i
 
 export function sourceAssets(item) {
   const rows = []
+  const seen = new Set()
   const add = (asset, name, role, type = 'image', nameKey = '', nameVars = {}) => {
-    if (!asset?.src || rows.some(row => row.src === asset.src)) return
+    if (!asset?.src || seen.has(asset.src)) return
+    seen.add(asset.src)
     rows.push({ name, role, type, origin: 'generated', folder: '', ...asset, nameKey, nameVars, id: fileId(asset.src) })
   }
   add(item.production?.cover, '封面原图', 'cover', 'image', '封面原图')

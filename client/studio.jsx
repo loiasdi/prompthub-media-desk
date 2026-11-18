@@ -412,12 +412,10 @@ const DONE_SUGGESTIONS = ['标题再短一点', '语气轻松一点', '开场再
 export function Studio() {
   const id = useDesk(s => s.focusId)
   const item = useDesk(s => s.state?.items.find(i => i.id === s.focusId))
-  const origin = useDesk(s => s.sheetOrigin)
   const live = useDesk(s => s.live[s.focusId])
   const settings = useDesk(s => s.settings)
   const chatOpen = useDesk(s => s.studioDock)
   const creationStage = useDesk(s => s.studioTab)
-  const ref = React.useRef(null)
   const production = item?.production
   const running = production?.status === 'running'
   const watching = running || [production?.cover, ...(production?.images ?? []), ...(production?.shots ?? [])].some(isBusy)
@@ -426,21 +424,6 @@ export function Studio() {
     if (id && watching) return watchProduction(id)
     return undefined
   }, [id, watching])
-
-  // 从卡片的位置展开成整个工作区
-  React.useLayoutEffect(() => {
-    const el = ref.current
-    if (!id || !el || reducedMotion()) return
-    if (origin) {
-      const box = el.getBoundingClientRect()
-      const inset = `inset(${origin.y - box.top}px ${box.right - origin.x - origin.w}px ${box.bottom - origin.y - origin.h}px ${origin.x - box.left}px round 20px)`
-      el.animate([{ clipPath: inset }, { clipPath: 'inset(0px 0px 0px 0px round 0px)' }], { duration: SPRING_SOFT.duration, easing: SPRING_SOFT.easing })
-    } else {
-      el.animate([{ opacity: 0, transform: 'translateY(10px)' }, { opacity: 1, transform: 'none' }], { duration: 320, easing: 'ease-out' })
-    }
-    // 只在切换灵感时播放
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id])
 
   React.useEffect(() => {
     if (!id) return undefined
@@ -455,11 +438,12 @@ export function Studio() {
     return () => window.removeEventListener('keydown', onKey)
   }, [id, chatOpen])
 
+  // 工作区直接显示，不为打开稿件逐帧裁切整个可滚动页面。
   // 打开的这条被删掉或撤销掉时，退回灵感墙，不留空白页
   React.useEffect(() => { if (id && !item) closeItem() }, [id, item])
   if (!item) return null
   return (
-    <div className={`md-studio md-editor ${chatOpen || running ? 'chat-open' : ''}`} ref={ref} role="dialog" aria-label={t('灵感')}>
+    <div className={`md-studio md-editor ${chatOpen || running ? 'chat-open' : ''}`} role="dialog" aria-label={t('灵感')}>
       <div className="md-studio-chat" id="studio-assistant" inert={!(chatOpen || running) ? '' : undefined}>
         <ChatPanel
           itemId={item.id}

@@ -37,10 +37,7 @@ function BoardCard({ item: raw }) {
         event.dataTransfer.effectAllowed = 'move'
       }}
     >
-      <button type="button" className="md-board-card-open" onClick={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect()
-        openItem(item.id, { x: rect.left, y: rect.top, w: rect.width, h: rect.height })
-      }}>
+      <button type="button" className="md-board-card-open" onClick={() => openItem(item.id)}>
       {poster ? <img src={poster} alt="" loading="lazy" draggable={false} /> : null}
       <strong>{item.title}</strong>
       <span className="md-board-meta">
@@ -52,9 +49,9 @@ function BoardCard({ item: raw }) {
       </button>
       <WorkspaceSummary item={raw} />
       <div className="md-content-card-actions">
-        <button type="button" onClick={() => openItem(item.id, null, 'prompts')}><Icon name="film" size={13} />{t('提示词')}</button>
-        <button type="button" onClick={() => openItem(item.id, null, 'assets')}><Icon name="folder" size={13} />{t('素材')}</button>
-        <button type="button" onClick={() => openItem(item.id, null, 'publish')}><Icon name="upRight" size={13} />{t('发布')}</button>
+        <button type="button" onClick={() => openItem(item.id, 'prompts')}><Icon name="film" size={13} />{t('提示词')}</button>
+        <button type="button" onClick={() => openItem(item.id, 'assets')}><Icon name="folder" size={13} />{t('素材')}</button>
+        <button type="button" onClick={() => openItem(item.id, 'publish')}><Icon name="upRight" size={13} />{t('发布')}</button>
       </div>
     </article>
   )
@@ -149,7 +146,7 @@ function Table({ items }) {
                 <td>{item.platform ? t(item.platform) : '—'}</td>
                 <td className="md-nowrap">{item.scheduledAt ? fmtWhen(item.scheduledAt) : '—'}</td>
                 <td className="md-nowrap">{relativeDay(item.createdAt)}</td>
-                <td className="md-content-table-files"><WorkspaceSummary item={item} compact /><button type="button" className="md-inline-link" onClick={event => { event.stopPropagation(); openItem(item.id, null, 'assets') }}>{t('查看素材')}</button></td>
+                <td className="md-content-table-files"><WorkspaceSummary item={item} compact /><button type="button" className="md-inline-link" onClick={event => { event.stopPropagation(); openItem(item.id, 'assets') }}>{t('查看素材')}</button></td>
               </tr>
             )
           })}

@@ -179,9 +179,10 @@ export function Desk() {
     <div className={`md-root ${narrow ? 'is-narrow' : ''} ${width < 780 ? 'is-compact' : ''} ${showDock ? 'has-dock' : ''}`} ref={rootRef}>
       <style>{css}</style>
       <style>{workspaceCss}</style>
-      <div className="md-ambient" aria-hidden="true"><i /><i /><i /></div>
+      {focused ? null : <div className="md-ambient" aria-hidden="true" />}
       <div className="md-main">
-        <header className="md-topbar" data-window-drag="">
+        {/* 原生窗口拖拽区域按几何位置命中，不能只靠 Studio 的 z-index 遮住。 */}
+        {focused ? null : <header className="md-topbar" data-window-drag="">
           <div className="md-brand" title={BRAND_NAME} aria-label={BRAND_NAME}><span>PromptHub</span><strong>MediaDesk</strong></div>
           <nav className="md-nav" aria-label={t('工作台导航')}>
             {NAV.map(entry => (
@@ -194,8 +195,8 @@ export function Desk() {
           {ready ? <ModelButton /> : null}
           <IconButton icon="gear" label={t('设置')} onClick={() => setDesk({ settingsOpen: true })} />
           {showDock ? null : <button type="button" className="md-open-dock" onClick={() => setDesk({ dockOpen: true })}><Icon name="chat" size={15} />{t('助手')}</button>}
-        </header>
-        <main className="md-content" key={view}>
+        </header>}
+        <main className={`md-content${focused ? ' is-covered' : ''}`} key={view}>
           {error ? (
             <div className="md-page"><p className="md-muted">{t('工作台加载失败：{error}', { error })}</p><button type="button" className="md-btn" onClick={loadDesk}>{t('重试')}</button></div>
           ) : ready ? <Active /> : <div className="md-loading"><span className="md-shimmer">{t('正在铺开灵感…')}</span></div>}

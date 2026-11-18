@@ -32,13 +32,13 @@ export function createWorkspaceDraft(item) {
 }
 
 export function workspaceAssets(item, draft) {
-  return [...new Map([...contentAssets(item), ...draft.assets].map(a => [a.id, a])).values()].filter(a => !draft.hidden.includes(a.id)).map(a => ({ ...localizeAsset(a), ...draft.edits[a.id] }))
+  const hidden = new Set(draft.hidden)
+  return [...new Map([...sourceAssets(item), ...draft.assets].map(a => [a.id, a])).values()].filter(a => !hidden.has(a.id)).map(a => ({ ...localizeAsset(a), ...draft.edits[a.id] }))
 }
 
 // 从最新内容投影默认文案，不在 getSnapshot 中反复写回旧 item 的状态。
-export function resolveWorkspaceDraft(item, stored) {
+export function resolveWorkspaceDraft(item, stored, assets = workspaceAssets(item, stored)) {
   const source = publishSource(item)
-  const assets = workspaceAssets(item, stored)
   const available = new Set(assets.map(a => a.id))
   const sources = new Set(assets.map(a => a.src))
   const publish = { ...stored.publish }
@@ -81,13 +81,16 @@ export const cancelWorkspaceImport = id => workspaceStore.cancelImport(id)
 
 export function useWorkspace(item) {
   const entry = React.useSyncExternalStore(workspaceStore.subscribe, () => workspaceStore.get(item))
-  const draft = React.useMemo(() => resolveWorkspaceDraft(item, entry.draft), [item, entry.draft])
+  const locale = lang()
+  const { assets: files, hidden, edits } = entry.draft
+  const assets = React.useMemo(() => workspaceAssets(item, { assets: files, hidden, edits }), [item, files, hidden, edits, locale])
+  const draft = React.useMemo(() => resolveWorkspaceDraft(item, entry.draft, assets), [item, entry.draft, assets])
   const update = patch => workspaceStore.update(item, patch)
   const syncPublish = () => update(d => {
     const source = publishSource(item)
     return { publish: { ...d.publish, ...Object.fromEntries(d.publishChanges.map(field => [field, source[field]])) }, publishEdited: Object.fromEntries(d.publishChanges.map(field => [field, false])) }
   })
-  return { draft, update, assets: workspaceAssets(item, draft), syncPublish, persistence: entry, retrySave: () => workspaceStore.flush(item.id), reloadWorkspace: () => workspaceStore.reload(item.id) }
+  return { draft, update, assets, syncPublish, persistence: entry, retrySave: () => workspaceStore.flush(item.id), reloadWorkspace: () => workspaceStore.reload(item.id) }
 }
 
 export function segmentsFromShots(item) {

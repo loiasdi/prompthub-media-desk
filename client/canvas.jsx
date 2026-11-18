@@ -140,11 +140,6 @@ function Node({ item, pos, index, entered, onOpen, tone }) {
   )
 }
 
-function originOf(event) {
-  const rect = event.currentTarget.getBoundingClientRect()
-  return { x: rect.left, y: rect.top, w: rect.width, h: rect.height }
-}
-
 function Scatter() {
   const items = useDesk(s => s.state.items)
   const stageRef = React.useRef(null)
@@ -261,9 +256,9 @@ function Scatter() {
     return () => observer.disconnect()
   }, [cam, flyTo])
 
-  const openCard = React.useCallback((item, event) => {
+  const openCard = React.useCallback(item => {
     if (suppressClick.current) return
-    openItem(item.id, originOf(event))
+    openItem(item.id)
   }, [])
 
   const onPointerDown = (event) => {
@@ -346,19 +341,42 @@ function Scatter() {
   React.useEffect(() => {
     const el = stageRef.current
     if (!el) return undefined
-    const onWheel = (event) => {
-      event.preventDefault()
-      const rect = el.getBoundingClientRect()
-      if (event.ctrlKey || event.metaKey) {
-        zoomAt(Math.exp(-event.deltaY * 0.01), event.clientX - rect.left, event.clientY - rect.top)
-      } else {
-        const c = cam.current
-        flyTo({ x: c.tx - event.deltaX, y: c.ty - event.deltaY, s: c.ts }, { instant: true })
+    let frame = 0
+    let pending = []
+    const applyWheel = () => {
+      frame = 0
+      let { tx: x, ty: y, ts: s } = cam.current
+      let bounds
+      for (const { zoom, dx, dy, cx, cy } of pending) {
+        if (zoom) {
+          bounds ??= el.getBoundingClientRect()
+          const next = Math.max(0.3, Math.min(2.2, s * Math.exp(-dy * 0.01)))
+          const k = next / s
+          const px = cx - bounds.left
+          const py = cy - bounds.top
+          x = px - (px - x) * k
+          y = py - (py - y) * k
+          s = next
+        } else {
+          x -= dx
+          y -= dy
+        }
       }
+      pending = []
+      flyTo({ x, y, s }, { instant: true })
+    }
+    const onWheel = event => {
+      event.preventDefault()
+      pending.push({ zoom: event.ctrlKey || event.metaKey, dx: event.deltaX, dy: event.deltaY, cx: event.clientX, cy: event.clientY })
+      // A trackpad may send several events per frame; only read/write layout once.
+      if (!frame) frame = requestAnimationFrame(applyWheel)
     }
     el.addEventListener('wheel', onWheel, { passive: false })
-    return () => el.removeEventListener('wheel', onWheel)
-  }, [cam, flyTo, zoomAt])
+    return () => {
+      el.removeEventListener('wheel', onWheel)
+      cancelAnimationFrame(frame)
+    }
+  }, [cam, flyTo])
 
   // 键盘 Tab 到屏幕外的卡片时，相机跟过去
   const onFocusIn = (event) => {
@@ -431,7 +449,7 @@ function Feed() {
       <div className="md-wall">
         {sorted.map((item, index) => (
           <div key={item.id} className={`md-wall-cell${rank(item.id) >= 0 ? ' is-related' : ''}`} style={{ animationDelay: `${Math.min(index * 22, 400)}ms` }}>
-            <Card item={item} onOpen={(row, event) => openItem(row.id, originOf(event))} />
+            <Card item={item} onOpen={row => openItem(row.id)} />
           </div>
         ))}
       </div>

@@ -283,3 +283,23 @@ test('封面提示词独立保存，旧后端丢字段时保留原文并允许�
   await store.flush(content.id)
   assert.equal(store.get(content).draft.coverPromptText, '')
 })
+
+test('素材快照：普通编辑不重新扫描同一批文件，同修订号的素材更新仍会生效', async () => {
+  const content = item()
+  let reads = 0
+  const asset = { id: 'img', type: 'image', get name() { reads++; return '原图' }, src: 'media-desk/files/first.png' }
+  content.workspace = { ...emptyWorkspace(content), assets: [asset] }
+  const store = createWorkspaceStore({ ...options, api: async (_path, body) => ({ workspace: fakeWorkspace(body.draft, body.revision + 1) }) })
+  store.get(content)
+  store.update(content, { publish: { title: '正在输入' } })
+  const before = reads
+  const edited = store.get(content)
+  assert.strictEqual(store.get(content), edited)
+  assert.equal(reads, before, 'React 重读快照不重新遍历素材')
+  const updated = { ...content, workspace: { ...content.workspace, assets: [{ ...asset, name: '更新的图片' }] } }
+  const merged = store.get(updated)
+  assert.equal(merged.draft.assets[0].name, '更新的图片')
+  assert.equal(merged.draft.publish.title, '正在输入')
+  await store.flush(content.id)
+  assert.equal(store.get(updated).status, 'saved')
+})
