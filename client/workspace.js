@@ -74,6 +74,7 @@ export function patchWorkspaceDraft(item, stored, patch) {
 
 const workspaceStore = createWorkspaceStore({ create: createWorkspaceDraft, resolve: resolveWorkspaceDraft, patch: patchWorkspaceDraft })
 export const flushWorkspace = id => workspaceStore.flush(id)
+export const flushAllWorkspaces = () => workspaceStore.flushAll()
 export const importWorkspaceFiles = (id, files, folder) => workspaceStore.importFiles(id, files, folder)
 export const recycleWorkspaceAsset = (id, assetId, restore) => workspaceStore.recycle(id, assetId, restore)
 export const runCoverAction = (item, path, body) => workspaceStore.action(item.id, path, body)

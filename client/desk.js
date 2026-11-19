@@ -148,7 +148,13 @@ export function watchProduction(id) {
 
 export async function saveSettings(payload) {
   try {
+    if (payload.documentDirMode === 'open') await (await import('./workspace.js')).flushAllWorkspaces()
     const settings = await request('settings', payload)
+    if (settings.storage?.opened) {
+      // 不同目录可以有相同稿件 ID，重新加载页面以清空原工作台缓存。
+      window.location.reload()
+      return true
+    }
     setLanguagePreference(settings.language)
     setDesk({ settings })
     toast(t('设置已保存'))

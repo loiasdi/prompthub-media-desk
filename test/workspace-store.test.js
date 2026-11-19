@@ -303,3 +303,17 @@ test('素材快照：普通编辑不重新扫描同一批文件，同修订号�
   await store.flush(content.id)
   assert.equal(store.get(updated).status, 'saved')
 })
+
+test('切换存储前立即写入所有待保存的稿件，不等待防抖计时器', async () => {
+  const calls = []
+  const store = createWorkspaceStore({ ...options, api: async (_path, body) => {
+    calls.push(body.id)
+    return { workspace: fakeWorkspace(body.draft, body.revision + 1) }
+  } })
+  const contents = [{ ...item(), id: 'edited-one' }, { ...item(), id: 'edited-two' }, { ...item(), id: 'unchanged' }]
+  for (const content of contents) store.get(content)
+  for (const content of contents.slice(0, 2)) store.update(content, { publish: { title: content.id } })
+  await store.flushAll()
+  assert.deepEqual(calls.sort(), ['edited-one', 'edited-two'])
+  assert.ok(contents.every(content => store.get(content).status === 'saved'))
+})

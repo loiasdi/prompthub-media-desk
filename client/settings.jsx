@@ -29,7 +29,7 @@ export function SettingsDialog() {
   const publishingOpen = useDesk(s => s.publishSettingsOpen)
   const [form, setForm] = React.useState(null)
   const [testing, setTesting] = React.useState(false)
-  const [saving, setSaving] = React.useState(false)
+  const [saving, setSaving] = React.useState(null)
   const [sample, setSample] = React.useState(null)
   const [advanced, setAdvanced] = React.useState(false)
   const [tab, setTab] = React.useState('general')
@@ -52,15 +52,28 @@ export function SettingsDialog() {
     image: { source: form.source, baseUrl: form.baseUrl, model: form.model, apiKey: form.apiKey, size: form.size, quality: form.quality, toolSize: form.toolSize, toolQuality: form.toolQuality, extra: form.extra },
     exportDir: form.exportDir, imageCount: Number(form.imageCount), shotCount: Number(form.shotCount),
   })
+  const folder = form.documentDir.trim()
+  const folderChanged = Boolean(folder && folder !== settings.documentDir)
+  const canOpenFolder = settings.canOpenDocumentDir && folderChanged
+  const folderHint = !settings.canOpenDocumentDir ? '当前运行环境不支持打开其他工作台。'
+    : !folder ? '请输入已有工作台的目录路径。'
+      : folderChanged ? '打开已有工作台只切换目录，不复制或合并数据。'
+        : '这就是当前工作台的目录。填写其他路径后可打开对应的工作台。'
+  const submit = async (mode) => {
+    if (saving || testing || (mode === 'open' && !canOpenFolder)) return
+    setSaving(mode)
+    try {
+      const data = mode === 'open' ? { documentDir: folder, documentDirMode: 'open' } : payload()
+      if (await saveSettings(data)) close()
+    } finally { setSaving(null) }
+  }
   const activePreset = PRESETS.find(p => p.baseUrl && p.baseUrl === form.baseUrl)?.id ?? (form.baseUrl ? 'custom' : null)
   return (
     <Dialog title={t('设置')} onClose={close} width={520}>
       <form className="md-form" onSubmit={async (event) => {
         event.preventDefault()
-        if (saving || testing) return
-        setSaving(true)
-        try { if (await saveSettings(payload())) close() }
-        finally { setSaving(false) }
+        const action = event.nativeEvent?.submitter?.value
+        await submit(action === 'save' || !canOpenFolder ? 'save' : 'open')
       }}>
         <fieldset disabled={saving || testing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'contents' }}>
         <div className="md-capture-tabs" role="tablist" aria-label={t('设置分类')}>
@@ -75,11 +88,12 @@ export function SettingsDialog() {
             ))}
           </div>
         </div>
-        <label className="md-field">
-          <span>{t('文档存储目录')}</span>
-          <input required value={form.documentDir} onChange={e => set('documentDir', e.target.value)} placeholder="/Users/…/自媒体工作台" />
-          <small>{t('填写完整目录路径。更换后自动迁移稿件、素材和回收站，旧目录保留为备份。')}</small>
-        </label>
+        <div className="md-field">
+          <span id="md-document-directory-label">{t('文档存储目录')}</span>
+          <input required aria-labelledby="md-document-directory-label" value={form.documentDir} onChange={e => set('documentDir', e.target.value)} placeholder="/Users/…/自媒体工作台" />
+          <small id="md-open-workspace-hint">{t(folderHint)}</small>
+          {folderChanged ? <small>{t('迁移只支持新目录或空目录，原目录保留。')}</small> : null}
+        </div>
         <label className="md-field">
           <span>{t('回收站自动清理')}</span>
           <select value={form.trashRetentionDays} onChange={e => set('trashRetentionDays', e.target.value)}>
@@ -88,8 +102,9 @@ export function SettingsDialog() {
           <small>{t('按删除时间计算，到期后永久删除。工作台运行时每小时检查，关闭期间到期的内容会在下次启动时清理。')}</small>
         </label>
         <label className="md-field">
-          <span>{t('成稿保存到')}</span>
-          <input value={form.exportDir} onChange={e => set('exportDir', e.target.value)} placeholder={settings.defaultExportDir} />
+          <span>{t('成稿导出目录')}</span>
+          <input value={form.exportDir} onChange={e => set('exportDir', e.target.value)} placeholder={settings.defaultExportDir} aria-describedby="md-export-directory-hint" />
+          <small id="md-export-directory-hint">{t('在稿件页点击「导出成稿」时，将脚本和已生成的图片、分镜导出为本地文件。不影响稿件的日常保存。')}</small>
         </label>
 
         <div className="md-field-row">
@@ -159,7 +174,7 @@ export function SettingsDialog() {
           <button type="button" className="md-btn" onClick={() => openPublishSettings()}>{t('配置发布账号')}</button>
           <small>{t('凭据保存在 Host 本地；保存配置不会发布内容。')}</small>
         </section>}
-        <div className="md-form-foot">
+        <div className="md-form-foot md-settings-foot">
           {tab === 'api' ? <button type="button" className="md-btn" disabled={testing} onClick={async () => {
             setTesting(true)
             setSample(null)
@@ -168,10 +183,11 @@ export function SettingsDialog() {
           }}>{testing ? <span className="md-shimmer">{t('正在试画…')}</span> : t('试画一张')}</button> : null}
           <span style={{ flex: 1 }} />
           <button type="button" className="md-btn" onClick={close}>{t('取消')}</button>
-          {tab !== 'publishing' ? <button type="submit" className="md-btn is-primary">{t('保存')}</button> : null}
+          {tab === 'general' || (tab === 'api' && folderChanged) ? <button type={canOpenFolder ? 'submit' : 'button'} value="open" formNoValidate className={canOpenFolder ? 'md-btn is-primary' : 'md-btn'} disabled={!canOpenFolder} aria-describedby={tab === 'general' ? 'md-open-workspace-hint' : undefined}>{t('打开已有工作台')}</button> : null}
+          {tab !== 'publishing' ? <button type="submit" value="save" className={canOpenFolder ? 'md-btn' : 'md-btn is-primary'}>{t(folderChanged ? '保存并迁移' : '保存')}</button> : null}
         </div>
         </fieldset>
-        {saving ? <small role="status">{t('正在保存设置与迁移文件，请稍候…')}</small> : null}
+        {saving ? <small role="status">{t(saving === 'open' ? '正在打开已有工作台…' : '正在保存设置与迁移文件，请稍候…')}</small> : null}
       </form>
     </Dialog>
   )

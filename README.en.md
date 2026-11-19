@@ -27,7 +27,9 @@ Text generation uses your configured DSH model. Images use an OpenAI-compatible 
 
 Settings has **General** and **API settings** tabs. General contains language, document storage, trash retention, export location and generation counts. API settings contains image sources, endpoints, models, keys, advanced options and test generation.
 
-The default data folder remains `~/.dsh/media-desk/` for compatibility. Choose a new empty folder in General settings, including a folder within an Obsidian vault. Existing manuscripts, assets, settings and trash are copied and verified before switching; the original folder remains as a backup.
+The default data folder remains `~/.dsh/media-desk/` for compatibility. In General settings, enter a new or empty folder and click **Save and migrate** to migrate the current workspace. Its contents are copied and verified; the original folder is kept. To reuse a workspace on a new device, enter the folder containing its `state.json` and choose **Open existing workspace**. This switches to that workspace and uses its settings without copying or merging the folders.
+
+**Manuscript export folder** controls where **Export manuscript** writes local files, not where the workspace saves drafts. Re-exporting a manuscript uses its previous export location.
 
 Each manuscript has its own folder under `内容/<id>/`, with Markdown documents and a `素材/` asset folder. Markdown output follows the storage configuration. External edits are preserved; conflicts are written as separate update files.
 

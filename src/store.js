@@ -114,11 +114,11 @@ export class Store {
   }
 
   useRoot(root, markdown = this.markdown) {
+    this.markdown = markdown
     if (this.root === root) return
     this.root = root
     this.file = join(root, 'state.json')
     this.filesDir = join(root, 'files')
-    this.markdown = markdown
     this.state = null
     this.mtimeMs = 0
     this.inode = 0

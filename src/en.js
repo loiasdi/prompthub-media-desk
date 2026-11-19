@@ -13,6 +13,15 @@ export const EN = {
   不支持的方法: 'Method not allowed',
   拒绝跨站请求: 'Cross-site request refused',
   操作: 'Action',
+  '无效的文档目录切换方式': 'Invalid document folder action',
+  '文档目录需要填写绝对路径': 'Enter an absolute path for the document folder',
+  '当前目录由 MEDIA_DESK_DATA_DIR 指定，请先移除环境变量后再修改': 'The folder is set by MEDIA_DESK_DATA_DIR. Remove the environment override before changing it.',
+  '新旧文档目录不能互相包含，请选择独立文件夹': 'Neither document folder can contain the other. Choose a separate folder.',
+  '文档目录不能包含应用配置目录': 'The document folder cannot contain the application configuration folder',
+  '有投稿任务正在进行，请完成后再更换目录': 'Wait for publishing to finish before changing folders',
+  '该目录不是有效的 MediaDesk 工作台，请选择包含原有 state.json 的目录': 'This is not a valid MediaDesk workspace. Choose the folder containing the original state.json.',
+  '有对话、生成或同步任务正在进行，请完成后再更换目录': 'Wait for chat, generation or sync to finish before changing folders',
+  '目标目录不是空目录，请选择一个新的或空的文件夹': 'The destination is not empty. Choose an empty folder or open an existing MediaDesk workspace instead.',
 
   // 订阅生图工具
   生图来源无效: 'Invalid image source',

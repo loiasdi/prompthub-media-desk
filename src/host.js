@@ -1,6 +1,6 @@
 import { parseSharedLink, sourceKind } from './inspiration-source.js'
 import { PACKAGE_NAME } from './brand.js'
-import { relocateStorage } from './storage-management.js'
+import { openStorage, relocateStorage } from './storage-management.js'
 import { FeishuSync } from './feishu/sync.js'
 import { storedAssetPath, validAssetPath } from './asset-storage.js'
 import { coverPromptAction, coverImageAction } from './cover-design.js'
@@ -361,7 +361,7 @@ export async function route(ctx, store, desk, req, res) {
       const item = state.items.find(row => row.id === id)
       return json(res, 200, { production: item?.production ?? null, workspace: item?.workspace, status: item?.status, live: desk.producer.status(id) })
     }
-    if (path === 'settings') { await store.read(); return json(res, 200, { ...publicSettings(await desk.settings.read(), Boolean(imageTool(ctx))), documentDir: store.root, defaultExportDir: defaultExportDir() }) }
+    if (path === 'settings') { await store.read(); return json(res, 200, { ...publicSettings(await desk.settings.read(), Boolean(imageTool(ctx))), documentDir: store.root, canOpenDocumentDir: !process.env.MEDIA_DESK_DATA_DIR, defaultExportDir: defaultExportDir() }) }
     if (path === 'models') {
       // 列出 Harness 里已接的提供方和它们公布的模型，给工作台的助手模型选择器用
       const llm = ctx.get('llm')
@@ -415,7 +415,11 @@ export async function route(ctx, store, desk, req, res) {
       const label = await store.undoLast()
       return json(res, 200, { label, state: await store.read(), canUndo: store.undo.length > 0 })
     }
-    case 'chat': return json(res, 200, await chatTurn(ctx, store, desk, body))
+    case 'chat': {
+      desk.activeChats = (desk.activeChats || 0) + 1
+      try { return json(res, 200, await chatTurn(ctx, store, desk, body)) }
+      finally { desk.activeChats-- }
+    }
     case 'chat/clear': {
       const state = await store.mutate('清空对话', (draft) => { draft.chat = []; return draft }, { undoable: false })
       return json(res, 200, { state })
@@ -463,21 +467,33 @@ export async function route(ctx, store, desk, req, res) {
     case 'style/extract': return json(res, 200, await extractStyle(ctx, store, body))
     case 'monid/import': return json(res, 200, await importAccountRoute(ctx, store, desk, body))
     case 'settings': {
-      await store.read()
-      const before = modelInfo(ctx)
-      await desk.settings.update(body, { validateOnly: true })
-      let storage = null
-      if (body.documentDir && body.documentDir.trim() !== store.root) {
-        if (desk.producer?.jobs?.size || desk.producer?.assets?.size || [...(desk.feishu?.jobs?.values() || [])].some(job => job.status === 'running')) throw Object.assign(new Error('有生成或同步任务正在进行，请完成后再更换目录'), { status: 409 })
-        storage = await relocateStorage(store, body.documentDir, { settingsPatch: body })
+      if (body.documentDirMode !== undefined && body.documentDirMode !== 'open') return json(res, 400, { error: tr('无效的文档目录切换方式') })
+      const opening = body.documentDirMode === 'open'
+      if (!opening) {
+        await store.read()
+        await desk.settings.update(body, { validateOnly: true })
       }
-      const updated = storage?.moved ? await desk.settings.read() : await desk.settings.update(body)
-      await store.run(async () => { await store.refresh(); await store.cleanupTrash(true) })
+      const before = modelInfo(ctx)
+      let storage = null
+      let updated
+      if (opening || (typeof body.documentDir === 'string' && body.documentDir.trim() && body.documentDir.trim() !== store.root)) {
+        if (desk.activeChats || desk.producer?.jobs?.size || desk.producer?.assets?.size || [...(desk.feishu?.jobs?.values() || [])].some(job => job.status === 'running')) throw Object.assign(new Error(tr('有对话、生成或同步任务正在进行，请完成后再更换目录')), { status: 409 })
+        if (opening) {
+          ({ storage, settings: updated } = await openStorage(store, body.documentDir))
+          desk.settled = false
+        } else {
+          storage = await relocateStorage(store, body.documentDir, { settingsPatch: body })
+        }
+      }
+      if (!opening) {
+        updated = storage?.moved ? await desk.settings.read() : await desk.settings.update(body)
+        await store.run(async () => { await store.refresh(); await store.cleanupTrash(true) })
+      }
       setAssistantModel(updated.assistant)
       const after = modelInfo(ctx)
       // 换了模型，上一个模型的失败状态不再算数
       if (before?.provider !== after?.provider || before?.model !== after?.model) Object.assign(modelStatus, { ok: null, error: null })
-      return json(res, 200, { ...publicSettings(updated, Boolean(imageTool(ctx))), documentDir: store.root, storage, defaultExportDir: defaultExportDir(), assistantEffective: modelInfo(ctx)?.label ?? null })
+      return json(res, 200, { ...publicSettings(updated, Boolean(imageTool(ctx))), documentDir: store.root, canOpenDocumentDir: !process.env.MEDIA_DESK_DATA_DIR, storage, defaultExportDir: defaultExportDir(), assistantEffective: modelInfo(ctx)?.label ?? null })
     }
     case 'settings/test': {
       const settings = await desk.settings.read()

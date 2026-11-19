@@ -234,7 +234,6 @@ export const PAGES = {
   '跟随 DeepSeek Harness': 'Match DeepSeek Harness',
   设置: 'Settings',
   语言: 'Language',
-  成稿保存到: 'Save drafts to',
   生图模型: 'Image model',
   '支持任何兼容 OpenAI 图片接口（/images/generations）的服务。': 'Works with any service compatible with the OpenAI images API (/images/generations).',
   接口地址: 'Endpoint',

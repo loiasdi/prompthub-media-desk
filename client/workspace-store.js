@@ -123,6 +123,7 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
     clearTimeout(timers.get(id))
     return entries.has(id) ? enqueue(id, () => saveNow(id)) : Promise.resolve()
   }
+  const flushAll = () => Promise.all([...entries.keys()].map(flush))
   const update = (item, changes) => {
     const entry = get(item)
     set(item.id, { draft: patch(item, entry.draft, changes), version: entry.version + 1, status: 'pending' })
@@ -211,5 +212,5 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
       if (document.visibilityState === 'hidden') for (const id of entries.keys()) flush(id).catch(() => {})
     })
   }
-  return { get, update, flush, reload, recycle, importFiles, action, cancelImport: id => controllers.get(id)?.abort(), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } }
+  return { get, update, flush, flushAll, reload, recycle, importFiles, action, cancelImport: id => controllers.get(id)?.abort(), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } }
 }

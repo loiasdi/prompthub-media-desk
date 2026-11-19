@@ -582,6 +582,7 @@ button.md-receipt:hover { transform: translateX(2px); }
 .md-root .md-field input, .md-root .md-field select { height: 36px; padding: 0 11px; }
 .md-root .md-field input:focus, .md-root .md-field select:focus, .md-root .md-field textarea:focus { border-color: var(--ink); }
 .md-form-foot { display: flex; gap: 6px; margin-top: 4px; }
+.md-settings-foot { flex-wrap: wrap; justify-content: flex-end; }
 .md-capture-tabs { display: flex; gap: 2px; padding: 4px; margin-bottom: 14px; border-radius: var(--r-md); background: var(--hover); }
 .md-capture-tabs button { flex: 1; height: 28px; border-radius: var(--r-sm); text-align: center; color: var(--ink3); font-size: 12.5px; }
 .md-capture-tabs button.is-on { background: var(--card); color: var(--ink); box-shadow: var(--dsw-elevation-soft); }

@@ -233,3 +233,51 @@ test('从设置进入发布账号再返回，保留原 Tab 和普通设置、API
   await act(async () => { tab('API 设置').props.onClick() })
   assert.equal(renderer.root.findAllByType('input').find(node => node.props.type === 'password').props.value, 'unsaved-image-key')
 })
+
+test('打开与迁移并列于设置底部，默认提交只打开已有工作台', async context => {
+  let posted, reloaded = 0, renderer
+  const previousWindow = globalThis.window, previousDocument = globalThis.document
+  globalThis.window = { addEventListener() {}, removeEventListener() {}, location: { reload: () => { reloaded++ } } }
+  globalThis.document = { addEventListener() {} }
+  context.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(url, 'media-desk/settings')
+    posted = JSON.parse(options.body)
+    return Response.json({ storage: { opened: true } })
+  })
+  context.after(async () => {
+    await act(async () => { renderer?.unmount(); setDesk({ settingsOpen: false }) })
+    if (previousWindow === undefined) delete globalThis.window
+    else globalThis.window = previousWindow
+    if (previousDocument === undefined) delete globalThis.document
+    else globalThis.document = previousDocument
+  })
+  await act(async () => {
+    setDesk({ settingsOpen: true, publishSettingsOpen: false, settings: { image: {}, documentDir: '/current', canOpenDocumentDir: true } })
+    renderer = TestRenderer.create(React.createElement(SettingsDialog))
+  })
+  const changeFolder = value => act(async () => {
+    renderer.root.findByProps({ 'aria-labelledby': 'md-document-directory-label' }).props.onChange({ target: { value } })
+  })
+  assert.equal(button(renderer, '打开已有工作台').props.disabled, true)
+  assert.match(text(renderer), /这就是当前工作台的目录/)
+  assert.match(text(renderer), /成稿导出目录/)
+  assert.match(text(renderer), /不影响稿件的日常保存/)
+  assert.equal(button(renderer, '保存').props.type, 'submit')
+  await changeFolder('   ')
+  assert.equal(button(renderer, '打开已有工作台').props.disabled, true)
+  assert.match(text(renderer), /请输入已有工作台的目录路径/)
+  await changeFolder('/Obsidian Vault/自媒体工作台')
+  assert.equal(button(renderer, '保存并迁移').props.type, 'submit')
+  const open = button(renderer, '打开已有工作台')
+  const migrate = button(renderer, '保存并迁移')
+  assert.equal(open.parent, migrate.parent)
+  assert.match(open.parent.props.className, /md-settings-foot/)
+  assert.match(open.props.className, /is-primary/)
+  assert.doesNotMatch(migrate.props.className, /is-primary/)
+  assert.equal(open.props.type, 'submit')
+  assert.equal(open.props.disabled, false)
+  assert.deepEqual(open.parent.findAllByType('button').filter(node => node.props.type === 'submit').map(node => node.props.value), ['open', 'save'])
+  await act(async () => { await renderer.root.findByType('form').props.onSubmit({ preventDefault() {} }) })
+  assert.deepEqual(posted, { documentDir: '/Obsidian Vault/自媒体工作台', documentDirMode: 'open' })
+  assert.equal(reloaded, 1)
+})
