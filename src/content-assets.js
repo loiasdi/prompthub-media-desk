@@ -1,8 +1,9 @@
 import { sanitizeCoverDesign } from './cover-design-schema.js'
 import { contentAssetDirectory } from './asset-storage.js'
-import { MAX_ASSET_BYTES, MEDIA_MIME } from './asset-rules.js'
+import { assertUploadRoot, withAssetUpload } from './asset-upload.js'
+import { MEDIA_MIME } from './asset-rules.js'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
+import { rename, rm } from 'node:fs/promises'
 import { join, extname, basename } from 'node:path'
 import { randomUUID, createHash } from 'node:crypto'
 import { Transform } from 'node:stream'
@@ -12,7 +13,7 @@ import { promisify } from 'node:util'
 import { emptyWorkspace, fail, fileId, registerWorkspaceSources, sanitizeWorkspace } from './workspace-schema.js'
 
 const exec = promisify(execFile)
-export { MAX_ASSET_BYTES, MEDIA_MIME }
+export { MEDIA_MIME }
 const typeFor = ext => MEDIA_MIME[ext]?.split('/')[0]
 
 export function assetSignature(header, ext) {
@@ -85,23 +86,9 @@ function expectRevision(ws, revision) {
 }
 
 export class ContentAssets {
-  constructor(store, { inspect = inspectMedia, maxBytes = MAX_ASSET_BYTES } = {}) {
+  constructor(store, { inspect = inspectMedia } = {}) {
     this.store = store
     this.inspect = inspect
-    this.maxBytes = maxBytes
-    this.lastCleanup = 0
-  }
-
-  async cleanPending() {
-    if (Date.now() - this.lastCleanup < 3600000) return
-    this.lastCleanup = Date.now()
-    const dir = join(this.store.root, 'pending')
-    const names = await readdir(dir).catch(() => [])
-    await Promise.all(names.filter(name => /^[\da-f-]+\.part$/.test(name)).map(async name => {
-      const file = join(dir, name)
-      const info = await stat(file).catch(() => null)
-      if (info && Date.now() - info.mtimeMs > 86400000) await rm(file, { force: true })
-    }))
   }
 
   async read(id) {
@@ -148,70 +135,73 @@ export class ContentAssets {
   }
 
   async import(id, stream, { name, folder = '', relativePath = '', revision, coverResult = false } = {}) {
-    const current = await this.read(id)
-    expectRevision(current, revision)
-    await this.cleanPending()
     const ext = extname(String(name)).toLowerCase()
     const type = typeFor(ext)
     if (!type) throw fail('不支持的媒体文件类型', 415)
     const cleanName = basename(String(name).replaceAll('\\', '/')).replace(/[\x00-\x1f]/g, '').slice(0, 240)
     if (!cleanName || cleanName.startsWith('.')) throw fail('文件名无效')
-    const token = randomUUID()
-    const filename = `asset_${token}${ext}`
-    const pendingDir = join(this.store.root, 'pending')
-    await mkdir(pendingDir, { recursive: true })
-    const pending = join(pendingDir, `${token}.part`)
-    const assetDir = await contentAssetDirectory(this.store.root, id)
-    const file = join(assetDir, filename)
-    const posterName = `asset_${token}-poster.jpg`
-    const posterFile = join(assetDir, posterName)
-    let bytes = 0
-    let header = Buffer.alloc(0)
-    const hash = createHash('sha256')
-    const meter = new Transform({ transform: (chunk, encoding, callback) => {
-      bytes += chunk.length
-      if (bytes > this.maxBytes) return callback(fail('文件超过 250 MB 限制', 413))
-      hash.update(chunk)
-      if (header.length < 64) header = Buffer.concat([header, chunk.subarray(0, 64 - header.length)])
-      callback(null, chunk)
-    } })
-    try {
+    return withAssetUpload(this.store, async ({ root, dir, token, state }) => {
+      expectRevision(currentWorkspace(getItem(state, id)), revision)
+      const filename = `asset_${token}${ext}`
+      const posterName = `asset_${token}-poster.jpg`
+      const pending = join(dir, filename)
+      const pendingPoster = join(dir, posterName)
+      let bytes = 0
+      let header = Buffer.alloc(0)
+      const hash = createHash('sha256')
+      const meter = new Transform({ transform: (chunk, encoding, callback) => {
+        bytes += chunk.length
+        hash.update(chunk)
+        if (header.length < 64) header = Buffer.concat([header, chunk.subarray(0, 64 - header.length)])
+        callback(null, chunk)
+      } })
       await pipeline(stream, meter, createWriteStream(pending, { flags: 'wx', mode: 0o600 }))
       if (!bytes || !assetSignature(header, ext)) throw fail('文件内容与扩展名不匹配', 415)
-      // 原子移入最终目录，检查失败时一并移除，不留下可见的半文件。
-      await rename(pending, file)
-      const metadata = await this.inspect(file, type, type === 'video' ? posterFile : null)
+      const metadata = await this.inspect(pending, type, type === 'video' ? pendingPoster : null)
       const src = `media-desk/files/${id}/${filename}`
       const asset = { id: fileId(src), src, name: cleanName, type, role: 'source', folder: '', origin: 'imported', bytes, sha256: hash.digest('hex'), importedAt: new Date().toISOString(), relativePath: String(relativePath).replaceAll('\\', '/').split('/').filter(p => p && p !== '.' && p !== '..').join('/').slice(0, 1000), ...metadata }
       if (coverResult === true && type === 'image') asset.coverResult = true
-      if (asset.hasPoster) asset.poster = `media-desk/files/${id}/${posterName}`
+      const hasPoster = asset.hasPoster
+      if (hasPoster) asset.poster = `media-desk/files/${id}/${posterName}`
       delete asset.hasPoster
-      return await this.store.mutate('导入内容素材', state => {
-        const item = getItem(state, id)
-        const ws = currentWorkspace(item)
-        expectRevision(ws, revision)
-        if (ws.assets.length >= 2000) throw fail('这篇内容的素材数量已达上限')
-        if (folder && ws.folders.some(f => f.id === folder && f.type === type)) asset.folder = folder
-        else if (asset.relativePath.includes('/')) {
-          const label = asset.relativePath.slice(0, asset.relativePath.lastIndexOf('/')).slice(0, 120)
-          let parent = ws.folders.find(f => f.name === label && f.type === type)
-          if (!parent) {
-            if (ws.folders.length >= 200) throw fail('文件夹数量已达上限')
-            parent = { id: `folder_${randomUUID()}`, name: label, type }
-            ws.folders.push(parent)
+      const moved = []
+      try {
+        return await this.store.mutate('导入内容素材', async state => {
+          assertUploadRoot(this.store, root)
+          const item = getItem(state, id)
+          const ws = currentWorkspace(item)
+          expectRevision(ws, revision)
+          if (ws.assets.length >= 2000) throw fail('这篇内容的素材数量已达上限')
+          if (folder && ws.folders.some(f => f.id === folder && f.type === type)) asset.folder = folder
+          else if (asset.relativePath.includes('/')) {
+            const label = asset.relativePath.slice(0, asset.relativePath.lastIndexOf('/')).slice(0, 120)
+            let parent = ws.folders.find(f => f.name === label && f.type === type)
+            if (!parent) {
+              if (ws.folders.length >= 200) throw fail('文件夹数量已达上限')
+              parent = { id: `folder_${randomUUID()}`, name: label, type }
+              ws.folders.push(parent)
+            }
+            asset.folder = parent.id
           }
-          asset.folder = parent.id
-        }
-        ws.assets.push(asset)
-        ws.revision++
-        ws.updatedAt = new Date().toISOString()
-        item.workspace = ws
-        return { asset, workspace: structuredClone(ws) }
-      }, { undoable: false })
-    } catch (err) {
-      await Promise.all([pending, file, posterFile].map(path => rm(path, { force: true })))
-      if (err.code === 'ENOSPC') throw fail('磁盘空间不足，未导入此文件', 507)
-      throw err
-    }
+          const assetDir = await contentAssetDirectory(root, id)
+          const file = join(assetDir, filename)
+          await rename(pending, file)
+          moved.push(file)
+          if (hasPoster) {
+            const poster = join(assetDir, posterName)
+            await rename(pendingPoster, poster)
+            moved.push(poster)
+          }
+          ws.assets.push(asset)
+          ws.revision++
+          ws.updatedAt = new Date().toISOString()
+          item.workspace = ws
+          return { asset, workspace: structuredClone(ws) }
+        }, { undoable: false })
+      } catch (err) {
+        await Promise.all(moved.map(path => rm(path, { force: true })))
+        throw err
+      }
+    })
   }
 }

@@ -1,7 +1,7 @@
 import { storedAssetPath } from '../src/asset-storage.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -134,9 +134,7 @@ test('生成轮询返回完整工作区登记，跨过的中间版本也能同�
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
 }))
 
-test('失败导入清理临时文件：超限、伪装、损坏、流中断、落盘失败均不登记', () => fixture(async ({ root, store, assets }) => {
-  const small = new ContentAssets(store, { inspect, maxBytes: 5 })
-  await assert.rejects(importPng(small), err => err.status === 413)
+test('失败导入清理临时文件：伪装、损坏、流中断、落盘失败均不登记', () => fixture(async ({ root, store, assets }) => {
   await assert.rejects(assets.import('piece', Readable.from(['<html>fake</html>']), { name: 'fake.png', revision: 0 }), err => err.status === 415)
   const broken = new ContentAssets(store, { inspect: async () => { throw new Error('broken') } })
   await assert.rejects(importPng(broken), /broken/)
@@ -150,6 +148,23 @@ test('失败导入清理临时文件：超限、伪装、损坏、流中断、�
   assert.deepEqual(await readdir(join(root, 'files')), [])
   assert.equal((await assets.read('piece')).revision, 0)
   assert.equal((await assets.read('piece')).assets.length, 0)
+}))
+
+test('提交前发现工作台已变化，即使同 ID 同修订也不会写到新目录', () => fixture(async ({ root, store }) => {
+  const other = new Store(join(root, 'other'))
+  await other.mutate('', state => { state.items = [{ id: 'piece', title: '另一篇' }] }, { undoable: false })
+  const assets = new ContentAssets(store, { inspect: async () => {
+    store.useRoot(other.root) // 模拟正常切换拦截之外的目录变化。
+    return { width: 1, height: 1 }
+  } })
+  await assert.rejects(importPng(assets), err => err.status === 409 && /工作台目录已更换/.test(err.message))
+  assert.deepEqual(await readdir(join(root, 'pending')), [])
+  for (const candidate of [new Store(root), other]) {
+    const workspace = await new ContentAssets(candidate).read('piece')
+    assert.equal(workspace.revision, 0)
+    assert.deepEqual(workspace.assets, [])
+    await assert.rejects(stat(join(candidate.root, '内容', 'piece', '素材')), { code: 'ENOENT' })
+  }
 }))
 
 test('媒体探测：本机工具缺失给出明确状态；损坏和类型不匹配不入库', async () => {
@@ -213,6 +228,47 @@ test('HTTP：导入音频、Range/HEAD 播放、回收站恢复、跨站拒绝�
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
 }))
 
+test('HTTP：通用上传和稿件素材导入都能流式保存超过 250 MB 的视频', () => fixture(async ({ root, store }) => {
+  const video = await readFile(new URL('../assets/v-ink.mp4', import.meta.url))
+  const size = 251_000_000
+  // 用 MP4 的 free box 补齐体积，不在内存中构建整个大文件。
+  const free = Buffer.alloc(8)
+  free.writeUInt32BE(size - video.length)
+  free.write('free', 4)
+  const padding = Buffer.alloc(1024 * 1024, 0x5a)
+  function* chunks() {
+    yield video
+    yield free
+    for (let remaining = size - video.length - free.length; remaining > 0; remaining -= padding.length) {
+      yield padding.subarray(0, Math.min(remaining, padding.length))
+    }
+  }
+  const desk = {}
+  const server = createServer((req, res) => route({}, store, desk, req, res).catch(err => { res.writeHead(err.status || 500, { 'content-type': 'application/json' }); res.end(JSON.stringify({ error: err.message })) }))
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  const base = `http://127.0.0.1:${server.address().port}/media-desk/`
+  try {
+    for (const endpoint of ['upload', 'content-assets/import?id=piece&revision=0&name=large.mp4']) {
+      const response = await fetch(base + endpoint, { method: 'POST', headers: { 'content-type': 'video/mp4', 'content-length': String(size) }, body: Readable.from(chunks()), duplex: 'half' })
+      const data = await response.json()
+      assert.equal(response.status, 200, `${endpoint}: ${data.error || ''}`)
+      const src = data.asset?.src ?? data.src
+      const path = await storedAssetPath(store.filesDir, src.slice(17))
+      assert.equal((await stat(path)).size, size)
+      const tail = await fetch(base + src.slice(11), { headers: { Range: 'bytes=-8' } })
+      assert.equal(tail.status, 206)
+      assert.deepEqual(Buffer.from(await tail.arrayBuffer()), padding.subarray(0, 8))
+      if (endpoint === 'upload') await rm(path)
+      else {
+        const reopened = await new ContentAssets(new Store(root)).read('piece')
+        assert.equal(reopened.assets[0].bytes, size)
+        assert.equal(reopened.assets[0].src, src)
+      }
+    }
+    assert.deepEqual(await readdir(join(root, 'pending')), [])
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
+}))
+
 test('素材按稿件归档，旧地址迁移后仍可读取，共用素材分别保留', () => fixture(async ({ root, store, assets }) => {
   const { asset } = await importPng(assets)
   assert.match(asset.src, /^media-desk\/files\/piece\//)
@@ -229,6 +285,32 @@ test('素材按稿件归档，旧地址迁移后仍可读取，共用素材分�
   assert.deepEqual(await readdir(store.filesDir), [])
   assert.deepEqual(await migrateContentAssets(store), { files: 0, copies: 0 })
   await assert.rejects(storedAssetPath(store.filesDir, '../state.json'), /路径无效/)
+}))
+
+test('通用上传清理过期暂存，保留活跃进程的文件、新文件和无关文件', () => fixture(async ({ root, store }) => {
+  const pending = join(root, 'pending')
+  const live = `upload-${process.pid}-00000000-0000-4000-8000-000000000001`
+  const dead = 'upload-2147483647-00000000-0000-4000-8000-000000000002'
+  const legacy = '00000000-0000-4000-8000-000000000003.part'
+  const fresh = '00000000-0000-4000-8000-000000000004.part'
+  const old = new Date(Date.now() - 48 * 3600_000)
+  for (const name of [live, dead]) {
+    const path = join(pending, name)
+    await mkdir(path, { recursive: true })
+    await writeFile(join(path, 'video.mp4'), 'unfinished')
+    await utimes(path, old, old)
+  }
+  for (const name of [legacy, fresh, 'keep.txt']) await writeFile(join(pending, name), 'unfinished')
+  for (const name of [legacy, 'keep.txt']) await utimes(join(pending, name), old, old)
+  const desk = {}
+  const server = createServer((req, res) => route({}, store, desk, req, res).catch(err => { res.writeHead(err.status || 500); res.end(err.message) }))
+  server.listen(0, '127.0.0.1'); await once(server, 'listening')
+  try {
+    const response = await fetch(`http://127.0.0.1:${server.address().port}/media-desk/upload`, { method: 'POST', headers: { 'content-type': 'image/png' }, body: PNG })
+    assert.equal(response.status, 200, await response.text())
+    assert.deepEqual((await readdir(pending)).sort(), [live, fresh, 'keep.txt'].sort())
+    assert.equal(await readFile(join(pending, live, 'video.mp4'), 'utf8'), 'unfinished')
+  } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
 }))
 
 test('首页收藏：本机抓取明确失败，可仅存链接；媒体上传可用且非法协议不入库', () => fixture(async ({ store }) => {

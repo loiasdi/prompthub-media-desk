@@ -1,14 +1,16 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, rm, mkdir, writeFile, readFile, realpath, symlink, readdir } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile, readFile, realpath, symlink, readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { Store } from '../src/store.js'
 import { Settings } from '../src/settings.js'
 import { openStorage, relocateStorage } from '../src/storage-management.js'
 import { FeishuSync } from '../src/feishu/sync.js'
-import { createServer } from 'node:http'
+import { ContentAssets } from '../src/content-assets.js'
+import { createServer, request } from 'node:http'
 import { once } from 'node:events'
+import { setTimeout as delay } from 'node:timers/promises'
 import { route } from '../src/host.js'
 
 test('更换文档目录迁移稿件素材回收站和设置，旧目录保留，飞书身份稳定且新保存使用新目录', async () => {
@@ -22,6 +24,8 @@ test('更换文档目录迁移稿件素材回收站和设置，旧目录保留�
     await settings.update({ trashRetentionDays: 3 })
     await mkdir(join(root, '内容', 'piece', '素材'), { recursive: true })
     await writeFile(join(root, '内容', 'piece', '素材', 'test.jpg'), '真实素材')
+    await mkdir(join(root, 'pending'))
+    await writeFile(join(root, 'pending', '00000000-0000-4000-8000-000000000001.part'), '中断的上传')
     await mkdir(join(root, '回收站', '内容', 'deleted'), { recursive: true })
     await writeFile(join(root, '回收站', '内容', 'deleted', '稿件.md'), '已删除的稿件')
     const sync = new FeishuSync(store)
@@ -31,6 +35,7 @@ test('更换文档目录迁移稿件素材回收站和设置，旧目录保留�
     assert.equal(sync.target({}), identity)
     assert.equal((await settings.read()).trashRetentionDays, 3)
     assert.equal(await readFile(join(target, '内容', 'piece', '素材', 'test.jpg'), 'utf8'), '真实素材')
+    await assert.rejects(readdir(join(target, 'pending')), { code: 'ENOENT' })
     assert.equal(await readFile(join(target, '回收站', '内容', 'deleted', '稿件.md'), 'utf8'), '已删除的稿件')
     assert.equal(JSON.parse(await readFile(join(configHome, 'media-desk-storage.json'))).root, target)
     await store.mutate('', state => { state.items[0].title = '新目录的改稿' })
@@ -152,4 +157,69 @@ test('打开已有工作台拒绝空目录、其他数据、损坏状态和链�
   assert.equal(store.root, root)
   await assert.rejects(readFile(join(configHome, 'media-desk-storage.json')), { code: 'ENOENT' })
   assert.equal(await readFile(join(target, '普通笔记.md'), 'utf8'), '保留')
+})
+
+test('两种上传期间，另一 Host 都不能打开或迁移工作台；完成后可以切换', async t => {
+  const base = await realpath(await mkdtemp(join(tmpdir(), 'desk-upload-switch-')))
+  const source = join(base, 'source'), target = join(base, 'target'), migrated = join(base, 'migrated')
+  const before = { DSH_HOME: process.env.DSH_HOME, MEDIA_DESK_DATA_DIR: process.env.MEDIA_DESK_DATA_DIR }
+  process.env.DSH_HOME = join(base, 'config')
+  delete process.env.MEDIA_DESK_DATA_DIR
+  const uploadStore = new Store(source), settingsStore = new Store(source), targetStore = new Store(target)
+  for (const store of [uploadStore, targetStore]) await store.mutate('', state => { state.items = [{ id: 'piece', title: '稿件' }] })
+  const uploadDesk = { assets: new ContentAssets(uploadStore, { inspect: async () => ({ metadataStatus: 'ready' }) }) }
+  const settingsDesk = { settings: new Settings(settingsStore) }
+  const server = createServer((req, res) => {
+    const settings = req.url === '/media-desk/settings'
+    route({ get: () => null }, settings ? settingsStore : uploadStore, settings ? settingsDesk : uploadDesk, req, res).catch(err => { res.writeHead(err.status || 500); res.end(err.message) })
+  })
+  t.after(async () => {
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    for (const [key, value] of Object.entries(before)) { if (value === undefined) delete process.env[key]; else process.env[key] = value }
+    await rm(base, { recursive: true, force: true })
+  })
+  server.listen(0, '127.0.0.1')
+  await once(server, 'listening')
+  const url = `http://127.0.0.1:${server.address().port}/media-desk/`
+  const post = body => fetch(url + 'settings', { method: 'POST', body: JSON.stringify(body) })
+  const mp4 = Buffer.from('0000ftypisom0000')
+  for (const endpoint of ['upload', 'content-assets/import?id=piece&revision=0&name=test.mp4']) {
+    const req = request(url + endpoint, { method: 'POST', headers: { 'content-type': 'video/mp4', 'content-length': mp4.length } })
+    const response = once(req, 'response')
+    response.catch(() => {})
+    try {
+      req.write(mp4.subarray(0, 12))
+      let written = false
+      const pending = join(source, 'pending')
+      for (let i = 0; i < 250 && !written; i++) {
+        const [dir] = await readdir(pending).catch(() => [])
+        if (dir) {
+          const staged = join(pending, dir)
+          const [file] = await readdir(staged)
+          if (file) written = (await stat(join(staged, file))).size > 0
+        }
+        if (!written) await delay(8)
+      }
+      assert.ok(written, `upload did not start: ${endpoint}`)
+      for (const change of [{ documentDir: target, documentDirMode: 'open' }, { documentDir: migrated }]) {
+        const blocked = await post(change)
+        assert.equal(blocked.status, 409)
+        assert.match(await blocked.text(), /有素材正在导入/)
+      }
+      req.end(mp4.subarray(12))
+      const [res] = await response
+      let text = ''
+      for await (const chunk of res) text += chunk
+      assert.equal(res.statusCode, 200, text)
+      const data = JSON.parse(text)
+      const asset = await fetch(url + (data.asset?.src ?? data.src).slice(11), { method: 'HEAD' })
+      assert.equal(asset.status, 200)
+      assert.deepEqual(await readdir(pending), [])
+    } finally { req.destroy() }
+  }
+  const switched = await post({ documentDir: target, documentDirMode: 'open' })
+  assert.equal(switched.status, 200)
+  await switched.text()
+  assert.equal((await new ContentAssets(settingsStore).read('piece')).assets.length, 0)
 })

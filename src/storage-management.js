@@ -5,6 +5,7 @@ import { dirname, basename, join, resolve, isAbsolute, relative, sep } from 'nod
 import { homedir } from 'node:os'
 import { Settings } from './settings.js'
 import { activeRecord, readPublishRecords } from './publish/records.js'
+import { assertNoAssetUploads } from './asset-upload.js'
 import { tr } from './i18n.js'
 
 const fail = message => Object.assign(new Error(tr(message)), { status: 400 })
@@ -46,7 +47,9 @@ export async function openStorage(store, input, { env = process.env } = {}) {
     if (!(await lstat(requested).catch(missing))?.isDirectory()) throw invalid()
     const root = await realpath(requested)
     const configHome = configHomeOf(env)
-    await checkSwitch(await realpath(store.root), root, configHome)
+    const source = await realpath(store.root)
+    if (root !== source) await assertNoAssetUploads(source)
+    await checkSwitch(source, root, configHome)
     const stateFile = join(root, 'state.json')
     if (!(await lstat(stateFile).catch(missing))?.isFile()) throw invalid()
     let state
@@ -75,12 +78,12 @@ async function digest(file) {
   for await (const chunk of createReadStream(file)) hash.update(chunk)
   return hash.digest('hex')
 }
-async function verify(source, target) {
+async function verify(source, target, isRoot = true) {
   for (const entry of await readdir(source, { withFileTypes: true })) {
-    if (entry.name.startsWith('.state-lock')) continue
+    if (entry.name.startsWith('.state-lock') || (isRoot && entry.name === 'pending')) continue
     if (entry.isSymbolicLink()) throw fail('文档目录中存在符号链接，请先移除后重试')
     const from = join(source, entry.name), to = join(target, entry.name)
-    if (entry.isDirectory()) await verify(from, to)
+    if (entry.isDirectory()) await verify(from, to, false)
     else if (!entry.isFile() || await digest(from) !== await digest(to)) throw fail(`目录迁移校验失败：${entry.name}`)
   }
 }
@@ -94,6 +97,7 @@ export async function relocateStorage(store, input, { env = process.env, setting
     await mkdir(dirname(requested), { recursive: true })
     const target = join(await realpath(dirname(requested)), basename(requested))
     if (target === source) return { root: store.root, moved: false }
+    await assertNoAssetUploads(source)
     const configHome = configHomeOf(env)
     await checkSwitch(source, target, configHome)
     const existing = await readdir(target).catch(err => { if (err.code !== 'ENOENT') throw err; return [] })
@@ -102,7 +106,7 @@ export async function relocateStorage(store, input, { env = process.env, setting
     let published = false
     try {
       for (const entry of await readdir(source)) {
-        if (!entry.startsWith('.state-lock')) await cp(join(source, entry), join(staging, entry), { recursive: true, preserveTimestamps: true, dereference: false })
+        if (!entry.startsWith('.state-lock') && entry !== 'pending') await cp(join(source, entry), join(staging, entry), { recursive: true, preserveTimestamps: true, dereference: false })
       }
       await verify(source, staging)
       // 飞书同步身份继续沿用迁移前的工作台，避免重复建文档和上传。

@@ -3,12 +3,14 @@ import { PACKAGE_NAME } from './brand.js'
 import { openStorage, relocateStorage } from './storage-management.js'
 import { FeishuSync } from './feishu/sync.js'
 import { storedAssetPath, validAssetPath } from './asset-storage.js'
+import { assertUploadRoot, withAssetUpload } from './asset-upload.js'
 import { coverPromptAction, coverImageAction } from './cover-design.js'
 // PromptHub MediaDesk host 半片：/media-desk/* 接口、文件服务和模型调用。
-import { createReadStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { execFile } from 'node:child_process'
-import { stat, writeFile } from 'node:fs/promises'
+import { rename, stat, writeFile } from 'node:fs/promises'
 import { dirname, extname, join } from 'node:path'
+import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { assistantModelOverride, callModel, chatPrompts, defaultSelection, extractJson, modelInfo, modelStatus, setAssistantModel } from './ai.js'
 import { defaultExportDir, resolveExportDir, saveProduction } from './export.js'
@@ -31,7 +33,6 @@ import { PublishError } from './publish/errors.js'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
 const MAX_JSON = 4_000_000
-const MAX_UPLOAD = 250_000_000
 const MIME = MEDIA_MIME
 const UPLOAD_EXT = Object.fromEntries(Object.entries(MIME).filter(([ext, type]) => ext !== '.jpeg' && !type.startsWith('audio/')).map(([ext, type]) => [type, ext]))
 
@@ -290,10 +291,15 @@ async function handleUpload(req, store, res) {
   const type = (req.headers['content-type'] || '').split(';')[0].trim().toLowerCase()
   const ext = UPLOAD_EXT[type]
   if (!ext) return json(res, 415, { error: tr('不支持这种文件：{type}', { type: type || tr('未知') }) })
-  const buffer = await readBuffer(req, MAX_UPLOAD)
-  await store.read()
   const name = `${newId('f')}${ext}`
-  await writeFile(join(store.filesDir, name), buffer)
+  await withAssetUpload(store, async ({ root, dir }) => {
+    const pending = join(dir, name)
+    await pipeline(req, createWriteStream(pending, { flags: 'wx', mode: 0o600 }))
+    await store.run(async () => {
+      assertUploadRoot(store, root)
+      await rename(pending, join(store.filesDir, name))
+    })
+  })
   return json(res, 200, { src: `media-desk/files/${name}`, kind: type.startsWith('video/') ? 'video' : 'image' })
 }
 

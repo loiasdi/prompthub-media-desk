@@ -17,7 +17,7 @@ Reels 需要操作者能在目标 Page 执行 `CREATE_CONTENT`，应用获得 `p
 
 ## 视频：Reels 发布与回查
 
-1. 打开普通稿件 → **发布 → Facebook → API 投稿**。选本地 MP4（推荐）或 MOV 成片，填标题、简介、话题；话题作为 `#标签` 附加到简介。素材上限是工作台的 **250 MB**。导入已读取媒体信息时，准备清单会验证 9:16、至少 540×960、24–60 fps、3–90 秒。不重编码、不传独立封面；旧导入缺少媒体信息时，剩余格式校验由 Meta 执行。建议以 H.264/AAC MP4 联调。
+1. 打开普通稿件 → **发布 → Facebook → API 投稿**。选本地 MP4（推荐）或 MOV 成片，填标题、简介、话题；话题作为 `#标签` 附加到简介。API 发布的成片上限为 **250 MB**。导入已读取媒体信息时，准备清单会验证 9:16、至少 540×960、24–60 fps、3–90 秒。不重编码、不传独立封面；旧导入缺少媒体信息时，剩余格式校验由 Meta 执行。建议以 H.264/AAC MP4 联调。
 2. 显式选择「公开」，声明是否使用 AI 生成或编辑。点「检查并准备发布」，核对目标公共主页、公开范围、文案和成片。这一步不调用上传或发布接口。
 3. 点「确认投稿」后才开始向 Meta 发送数据。`graph.facebook.com` 初始化会话 → `rupload.facebook.com` 以 HTTPS 接收本地文件流 → `graph.facebook.com` 提交 `PUBLISHED` 与 AI 声明。支持 Meta 文档两种上传地址形式；域名、路径、版本和视频 ID 均校验，不跟随跳转，不向 AiToEarn/第三方网盘上载。
 4. 提交后可点击「查询平台状态」。编码 `ready` 不代表已公开；只有回查确认 publishing 阶段公开完成才显示作品链接。上传完成后会在最终提交前保存视频 ID；如果提交响应丢失，可凭该回执回查，不能自动重投。回查异常时保留已有记录，可去 Meta Business Suite 人工核对。
@@ -25,7 +25,7 @@ Reels 需要操作者能在目标 Page 执行 `CREATE_CONTENT`，应用获得 `p
 ## 视频：快拍（Story）发布与回查
 
 1. 沿用 **发布 → Facebook → 视频 → API 投稿**，在「视频发布位置」选择「视频快拍（Story）」。默认仍是 Reels，不会把既有稿件静默改成快拍。Host 的 `storySupported` 能力由配置的 Graph 版本推导；当前入口只对 v27.0 及以上开放，旧版本的选项禁用，Host 同样拦截。无需新增 AiToEarn 账号、Key、云服务或浏览器插件。
-2. 选择 **3–60 秒的本地 MP4**，本地上限仍为 250 MB。时长、宽、高和帧率元数据都必须可读，缺失不能绕过；按 9:16、至少 540×960、24–60 fps 验证，编码与其余平台规格由 Meta 校验，不替用户重编码。显式确认公开和 AI 声明。上游 `facebook.service.ts::publishVideoStory` 的会话、直传和最终提交顺序可复用，URL 来源改成 Host 的私有快照文件流。
+2. 选择 **3–60 秒的本地 MP4**，API 发布的成片上限为 250 MB。时长、宽、高和帧率元数据都必须可读，缺失不能绕过；按 9:16、至少 540×960、24–60 fps 验证，编码与其余平台规格由 Meta 校验，不替用户重编码。显式确认公开和 AI 声明。上游 `facebook.service.ts::publishVideoStory` 的会话、直传和最终提交顺序可复用，URL 来源改成 Host 的私有快照文件流。
 3. **快拍不附带标题、正文、话题或独立封面。** 这些文案只留在本地记录；需要展示的文字必须制作在视频中。参数提示和确认单明确说明这一点，确认单将标题标为「本地记录标题（不发送）」，不假装正文已经发送。
 4. 准备只读。人工确认后才核对 `/me` → `POST /{page-id}/video_stories`，`upload_phase=start` → 校验官方 `rupload.facebook.com/video-upload/{version}/{video-id}` → 以 `OAuth`、`offset=0`、真实 `file_size`/`Content-Length` 上传本地流。每次初始化新媒体，不复用已发布的视频 ID；官方不允许用已发过帖的媒体创建 Story。
 5. 上传确认 `success=true` 后再次核对 Page，将视频 ID 和最终提交检查点先写入原有 `.publish-records.json`；然后向同一个 `video_stories` 发出唯一一次 `upload_phase=finish`，参数只有 `video_id` 与同次 `is_ai_generated`。不发送 Reel 专用 `video_state`、文字或上游未在当前指南列出的 `content_category`。要求 `success=true` 和有效 `post_id`；支持官方示例的安全整数和完整数字字符串，不舍入不安全 JSON 数字，复合帖子 ID 必须归属当前 Page。视频 ID 作为回查回执，帖子 ID 单独持久化。
