@@ -49,6 +49,7 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
 
   async function request(url, { stage, signal, method = 'GET', accessToken, headers, body, stream, readLocation } = {}) {
     const submit = stage === 'submit'
+    const thumbnail = stage === 'thumbnail'
     const requestError = (code, message, details) => new PublishError(code, message, {
       stage, outcome: stage === 'review' ? 'unknown' : 'failed', ...details,
     })
@@ -62,7 +63,7 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
     const controller = new AbortController()
     const cancel = () => controller.abort()
     signal?.addEventListener('abort', cancel, { once: true })
-    const timer = setTimeout(cancel, submit ? uploadTimeoutMs : timeoutMs)
+    const timer = setTimeout(cancel, submit || thumbnail ? uploadTimeoutMs : timeoutMs)
     let httpStatus, media
     const unconfirmed = () => requestError('YOUTUBE_SUBMISSION_UNCONFIRMED', '无法确认 YouTube 是否已接收视频，请先在 YouTube Studio 核对', { outcome: 'unknown', httpStatus })
     try {
@@ -75,7 +76,7 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
         httpStatus = response.status
       } catch {
         if (submit) throw unconfirmed()
-        throw requestError(controller.signal.aborted ? 'ABORTED' : 'YOUTUBE_RESPONSE_UNAVAILABLE', '未收到可确认的 YouTube 响应')
+        throw requestError(controller.signal.aborted ? 'ABORTED' : 'YOUTUBE_RESPONSE_UNAVAILABLE', '未收到可确认的 YouTube 响应', { ...(thumbnail && { outcome: 'unknown' }) })
       }
       if (!response.ok) {
         // submit() only sends the first PUT to a newly initialized session, never to a reused one.
@@ -87,7 +88,7 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
           void response.body?.cancel().catch(() => {})
         }
         if (submit) throw unconfirmed()
-        throw requestError('YOUTUBE_REQUEST_FAILED', `YouTube 请求未成功（HTTP ${httpStatus}）`, { httpStatus })
+        throw requestError('YOUTUBE_REQUEST_FAILED', `YouTube 请求未成功（HTTP ${httpStatus}）`, { httpStatus, ...(thumbnail && httpStatus >= 500 && { outcome: 'unknown' }) })
       }
       if (readLocation) {
         const location = uploadLocation(response.headers.get('location'))
@@ -99,7 +100,7 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
         if (data && typeof data === 'object' && !Array.isArray(data) && !data.error) return data
       }
       if (submit) throw unconfirmed()
-      throw requestError('YOUTUBE_INVALID_RESPONSE', 'YouTube 未返回有效回执', { httpStatus })
+      throw requestError('YOUTUBE_INVALID_RESPONSE', 'YouTube 未返回有效回执', { httpStatus, ...(thumbnail && { outcome: 'unknown' }) })
     } finally {
       clearTimeout(timer)
       signal?.removeEventListener('abort', cancel)
@@ -152,6 +153,15 @@ export function createYouTubeClient({ clientId, clientSecret, redirectUri }, {
     channels: (accessToken, signal) => api('channels', 'account', accessToken, { part: 'snippet', mine: 'true', maxResults: '2' }, signal),
     categories: (accessToken, filter, signal) => api('videoCategories', 'categories', accessToken, { part: 'snippet', ...filter }, signal),
     detail: (accessToken, id, signal) => api('videos', 'review', accessToken, { part: 'snippet,status', id }, signal),
+    processing: (accessToken, id, signal) => api('videos', 'review', accessToken, { part: 'snippet,status,processingDetails', id }, signal),
+    thumbnail(accessToken, videoId, cover, signal) {
+      const url = new URL('https://www.googleapis.com/upload/youtube/v3/thumbnails/set')
+      url.search = new URLSearchParams({ videoId, uploadType: 'media' }).toString()
+      return request(url, {
+        stage: 'thumbnail', method: 'POST', accessToken, signal, stream: () => cover.stream(),
+        headers: { 'content-type': cover.mime, 'content-length': String(cover.sizeBytes) },
+      })
+    },
     init(accessToken, video, metadata, notifySubscribers, signal) {
       const url = new URL(UPLOAD)
       url.search = new URLSearchParams({ uploadType: 'resumable', part: 'snippet,status', notifySubscribers: String(notifySubscribers) }).toString()

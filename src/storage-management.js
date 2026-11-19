@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { dirname, basename, join, resolve, isAbsolute, relative } from 'node:path'
 import { homedir } from 'node:os'
 import { Settings } from './settings.js'
+import { activeRecord, readPublishRecords } from './publish/records.js'
 
 const fail = message => Object.assign(new Error(message), { status: 400 })
 const inside = (parent, child) => { const path = relative(parent, child); return !path || (!path.startsWith('..') && !isAbsolute(path)) }
@@ -33,6 +34,7 @@ export async function relocateStorage(store, input, { env = process.env, setting
     await mkdir(dirname(requested), { recursive: true })
     const target = join(await realpath(dirname(requested)), basename(requested))
     if (target === source) return { root: store.root, moved: false }
+    if ((await readPublishRecords(source)).some(activeRecord)) throw Object.assign(new Error('有投稿任务正在进行，请完成后再更换目录'), { status: 409 })
     if (inside(source, target) || inside(target, source)) throw fail('新旧文档目录不能互相包含，请选择独立文件夹')
     const configHome = env.DSH_HOME || join(homedir(), '.dsh')
     if (inside(target, resolve(configHome))) throw fail('文档目录不能包含应用配置目录')

@@ -17,6 +17,7 @@ Each stage has its own page. Ideas, outlines and manuscripts are saved separatel
 - Edit and store global video parameters and segment prompts per manuscript.
 - Manage cover prompts, aspect-ratio variants, reference images and manuscript illustrations together.
 - Keep assets in the folder of the manuscript they belong to.
+- Review the copy, local assets, and account in the Publish tab, then explicitly confirm the submission. Supported formats include video on integrated platforms, Bluesky text and image posts, Kuaishou video with a local JPEG cover, Facebook video and single-photo Stories, Facebook/Pinterest/LinkedIn/X image posts, Facebook/Threads/LinkedIn/X text posts, and single WeChat Official Account articles with optional local body images. Kuaishou's official media upload gateway uses unencrypted HTTP and is disabled unless explicitly enabled; Facebook photo Stories do not support AI declarations. WeChat requires publication permissions, and TikTok has app-audit and intended-use restrictions. [Supported platforms, scope, and Host setup](docs/local-publishing-entry.md)
 - Preview and sync content to Feishu documents, reusing unchanged files.
 - Manage schedules, performance reviews and writing styles, with Chinese and English interfaces.
 

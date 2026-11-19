@@ -3,5 +3,6 @@ import { CORE } from './core.js'
 import { PAGES } from './pages.js'
 import { STUDIO } from './studio.js'
 import { WORKSPACE } from './workspace.js'
+import { PUBLISH } from './publish.js'
 
-export const EN = { ...CORE, ...PAGES, ...STUDIO, ...WORKSPACE }
+export const EN = { ...CORE, ...PAGES, ...STUDIO, ...WORKSPACE, ...PUBLISH }

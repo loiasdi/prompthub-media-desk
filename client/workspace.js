@@ -77,6 +77,7 @@ export const flushWorkspace = id => workspaceStore.flush(id)
 export const importWorkspaceFiles = (id, files, folder) => workspaceStore.importFiles(id, files, folder)
 export const recycleWorkspaceAsset = (id, assetId, restore) => workspaceStore.recycle(id, assetId, restore)
 export const runCoverAction = (item, path, body) => workspaceStore.action(item.id, path, body)
+export const prepareWorkspacePublish = (id, platform, options) => workspaceStore.action(id, 'publish/prepare', { platform, options })
 export const cancelWorkspaceImport = id => workspaceStore.cancelImport(id)
 
 export function useWorkspace(item) {

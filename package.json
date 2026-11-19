@@ -53,6 +53,21 @@
     "assets",
     "cordis.patch.yml",
     "README.md",
+    "THIRD-PARTY-NOTICES.txt",
+    "docs/local-publishing-entry.md",
+    "docs/local-bilibili-publishing-plan.md",
+    "docs/local-youtube-publishing-plan.md",
+    "docs/local-bluesky-publishing.md",
+    "docs/local-kuaishou-publishing.md",
+    "docs/local-facebook-reels.md",
+    "docs/local-instagram-reels.md",
+    "docs/local-douyin-publishing.md",
+    "docs/local-linkedin-publishing.md",
+    "docs/local-x-publishing.md",
+    "docs/local-pinterest-publishing.md",
+    "docs/local-tiktok-publishing.md",
+    "docs/local-threads-publishing.md",
+    "docs/local-wechat-publishing.md",
     "LICENSE"
   ],
   "repository": {
@@ -62,5 +77,8 @@
   "homepage": "https://github.com/loiasdi/prompthub-media-desk#readme",
   "bugs": {
     "url": "https://github.com/loiasdi/prompthub-media-desk/issues"
+  },
+  "dependencies": {
+    "twitter-text": "3.1.0"
   }
 }

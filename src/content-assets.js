@@ -1,5 +1,6 @@
 import { sanitizeCoverDesign } from './cover-design-schema.js'
 import { contentAssetDirectory } from './asset-storage.js'
+import { MAX_ASSET_BYTES, MEDIA_MIME } from './asset-rules.js'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join, extname, basename } from 'node:path'
@@ -11,8 +12,7 @@ import { promisify } from 'node:util'
 import { emptyWorkspace, fail, fileId, registerWorkspaceSources, sanitizeWorkspace } from './workspace-schema.js'
 
 const exec = promisify(execFile)
-export const MAX_ASSET_BYTES = 250_000_000
-export const MEDIA_MIME = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp', '.gif': 'image/gif', '.mp4': 'video/mp4', '.webm': 'video/webm', '.mov': 'video/quicktime', '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.ogg': 'audio/ogg' }
+export { MAX_ASSET_BYTES, MEDIA_MIME }
 const typeFor = ext => MEDIA_MIME[ext]?.split('/')[0]
 
 export function assetSignature(header, ext) {
@@ -33,7 +33,7 @@ export function assetSignature(header, ext) {
 export async function inspectMedia(file, type, posterFile, run = exec) {
   let info
   try {
-    const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_entries', 'format=duration:stream=codec_type,width,height,duration:stream_side_data=rotation', '-of', 'json', file], { timeout: 20000, maxBuffer: 1_000_000 })
+    const { stdout } = await run('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_entries', 'format=duration:stream=codec_type,width,height,duration,avg_frame_rate:stream_side_data=rotation', '-of', 'json', file], { timeout: 20000, maxBuffer: 1_000_000 })
     info = JSON.parse(stdout)
   } catch (err) {
     if (err.code === 'ENOENT') return { metadataStatus: 'unavailable', metadataWarning: '本机未安装 ffprobe，无法读取媒体信息' }
@@ -48,6 +48,9 @@ export async function inspectMedia(file, type, posterFile, run = exec) {
   if (video) {
     const rotation = video.side_data_list?.find(row => Number.isFinite(row.rotation))?.rotation || 0
     const rotated = Math.abs(rotation) % 180 === 90
+    const rate = /^(\d+)\/(\d+)$/.exec(video.avg_frame_rate || '')
+    const fps = rate && Number(rate[1]) / Number(rate[2])
+    if (Number.isFinite(fps) && fps > 0) metadata.frameRate = fps
     metadata.width = rotated ? video.height : video.width
     metadata.height = rotated ? video.width : video.height
   }
@@ -69,7 +72,7 @@ function getItem(state, id) {
   return item
 }
 
-function currentWorkspace(item) {
+export function currentWorkspace(item) {
   if (item.workspace && item.workspace.schemaVersion !== 1) throw fail('工作区数据版本较新，请更新应用后再编辑', 409)
   const copy = { ...item, workspace: structuredClone(item.workspace || emptyWorkspace(item)) }
   registerWorkspaceSources(copy)

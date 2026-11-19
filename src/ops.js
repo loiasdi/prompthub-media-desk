@@ -6,7 +6,7 @@ import { currentLang, platformName, tr } from './i18n.js'
 export const STATUSES = ['idea', 'outline', 'draft', 'ready', 'published']
 export const STATUS_LABEL = { idea: '灵感', outline: '大纲', draft: '草稿', ready: '待发布', published: '已发布' }
 export const KINDS = ['image', 'video', 'web', 'quote', 'note']
-export const PLATFORMS = ['公众号', '小红书', '抖音', 'B站', '视频号', 'TikTok', 'Instagram', 'YouTube', 'X']
+export const PLATFORMS = ['公众号', '小红书', '抖音', '快手', 'B站', '视频号', 'TikTok', 'Instagram', 'YouTube', 'Facebook', 'LinkedIn', 'X', 'Pinterest', 'Threads', 'Bluesky']
 
 /** 状态在当前语言下的名字。 */
 export function statusLabel(status) {

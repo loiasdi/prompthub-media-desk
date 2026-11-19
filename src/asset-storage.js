@@ -1,8 +1,9 @@
 import { mkdir, realpath, readdir, stat } from 'node:fs/promises'
 import { join, dirname, relative, isAbsolute } from 'node:path'
+import { validAssetPath } from './asset-rules.js'
 
 const safePart = value => typeof value === 'string' && /^[\w-]+$/.test(value)
-export const validAssetPath = value => typeof value === 'string' && /^(?:[\w-]+\/)?[\w-][\w.-]*$/.test(value) && !value.split('/').some(p => p === '.' || p === '..')
+export { validAssetPath }
 
 export async function contentAssetDirectory(root, id) {
   if (!safePart(id)) throw new Error('内容 ID 无效')

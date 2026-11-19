@@ -65,6 +65,10 @@ const server = createServer(async (req, res) => {
       return
     }
     const endpoint = url.pathname.replace(/^\/media-desk\//, '')
+    if (endpoint.startsWith('publish/')) {
+      if (req.method === 'GET' && endpoint === 'publish/status') return json(res, 200, { platforms: {}, jobs: [], lockedPlatforms: {} })
+      return json(res, 409, { error: '独立预览不连接发布平台，请在 DSH 中使用' })
+    }
     if (['settings', 'capture-url', 'upload'].includes(endpoint) || endpoint.startsWith('feishu/') || endpoint === 'workspace' || endpoint.startsWith('workspace/') || endpoint.startsWith('content-assets/') || endpoint.startsWith('files/')) return await withLang(req.headers['x-media-desk-lang'], () => route(previewContext, store, desk, req, res))
     state = await store.read()
     if (req.method === 'GET') {

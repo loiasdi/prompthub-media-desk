@@ -222,7 +222,7 @@
 
 第一版自动发布验收必须落在至少一个真实平台和测试账号上。最终能启用哪些平台，以应用权限和官方接口验证结果确定。平台选择和凭证不影响前面的内容、素材和发布版本设计。
 
-本地直发已实现 [B 站适配器](local-bilibili-publishing-plan.md) 与 [YouTube 适配器](local-youtube-publishing-plan.md)。二者均未接入发布按钮；各自验证自有应用后再启用。
+本地直发已实现 [B 站适配器](local-bilibili-publishing-plan.md) 与 [YouTube 适配器](local-youtube-publishing-plan.md)。两者已接入 [DSH 发布入口](local-publishing-entry.md)，默认关闭，各自验证自有应用后再启用。
 
 浏览器脚本模拟点击不作为默认发布实现；如后续采用，需要独立适配和验收，不与 API 发布混为同一能力。
 

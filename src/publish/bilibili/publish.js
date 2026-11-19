@@ -1,10 +1,9 @@
 // Adapted from AiToEarn's Bilibili service and publish provider at 11dd1957 (MIT).
+import { bilibiliCopyIssue } from '../draft-copy.js'
 import { PublishError } from '../errors.js'
+import { PUBLISH_COVER_BYTES, PUBLISH_COVER_MIME, PUBLISH_VIDEO_MIME } from '../media-rules.js'
 
 const CHUNK_BYTES = 100 * 1024 * 1024 // Upstream protocol baseline; verify with a granted app before enablement.
-const COVER_BYTES = 10 * 1024 * 1024 // Local memory bound, not a claim about Bilibili's limit.
-const VIDEO_MIME = new Set(['video/mp4', 'video/webm', 'video/quicktime'])
-const COVER_MIME = new Set(['image/jpeg', 'image/png'])
 const PUBLIC_ID = /^(?:BV[0-9A-Z]+|av\d+)$/i
 const invalid = message => new PublishError('INVALID_BILIBILI_DRAFT', message, { stage: 'check' })
 const usefulString = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 500
@@ -16,10 +15,10 @@ function checkSource(source, allowed, limit = Number.MAX_SAFE_INTEGER) {
 }
 
 function postBody({ title, description = '', topics = [], categoryId, copyright, noReprint = false, source = '' }) {
-  if (typeof title !== 'string' || !title.trim() || [...title].length > 79 || typeof description !== 'string' || [...description].length > 249) throw invalid('B 站投稿标题或简介不符合当前适配器长度限制')
+  const copyIssue = bilibiliCopyIssue({ title, description, topics })
+  if (copyIssue) throw invalid(copyIssue)
   if (!Number.isSafeInteger(categoryId) || categoryId < 1) throw invalid('请选择 B 站投稿分区')
   if (![1, 2].includes(copyright) || typeof noReprint !== 'boolean' || typeof source !== 'string' || source.length > 500 || (copyright === 2 && !source.trim())) throw invalid('请选择原创或转载；转载稿件必须填写来源')
-  if (!Array.isArray(topics) || topics.some(tag => !usefulString(tag) || /[,#\r\n]/.test(tag))) throw invalid('请将 B 站话题整理成独立的标签')
   return {
     title: title.trim(), tid: categoryId, tag: [...new Set(topics.map(tag => tag.trim()))].join(','),
     copyright, no_reprint: noReprint ? 1 : 0, desc: description,
@@ -42,7 +41,7 @@ async function coverForm(source) {
   let length = 0
   for await (const chunk of source.stream()) {
     length += chunk.length
-    if (length > COVER_BYTES || length > source.sizeBytes) throw invalid('上传前封面文件大小发生变化')
+    if (length > PUBLISH_COVER_BYTES || length > source.sizeBytes) throw invalid('上传前封面文件大小发生变化')
     chunks.push(chunk)
   }
   if (length !== source.sizeBytes) throw invalid('上传前封面文件大小发生变化')
@@ -54,14 +53,19 @@ async function coverForm(source) {
 /** Host-only adapter. The integration must validate credentials and take a private immutable snapshot first. */
 export function createBilibiliPublisher(client, { chunkBytes = CHUNK_BYTES } = {}) {
   if (!Number.isSafeInteger(chunkBytes) || chunkBytes < 1) throw new TypeError('Invalid Bilibili part size')
+  function check({ draft, video, cover }) {
+    const body = postBody(draft)
+    checkSource(video, PUBLISH_VIDEO_MIME)
+    if (cover) checkSource(cover, PUBLISH_COVER_MIME, PUBLISH_COVER_BYTES)
+    return body
+  }
   return Object.freeze({
+    check,
     async submit({ accessToken, draft, video, cover, beforeSubmit, signal }) {
       if (typeof beforeSubmit !== 'function') throw new TypeError('A durable submission checkpoint is required')
-      const body = postBody(draft)
-      checkSource(video, VIDEO_MIME)
+      const body = check({ draft, video, cover })
       let form
       if (cover) {
-        checkSource(cover, COVER_MIME, COVER_BYTES)
         form = await coverForm(cover)
       }
       const { upload_token: uploadToken } = await client.init(accessToken, video.filename, signal)

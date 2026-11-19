@@ -168,3 +168,11 @@ test('灵感和大纲独立保存，更新正文不覆盖前期创作内容', as
   assert.equal(sanitizeWorkspace(item, { ...saved, promptText: '视频提示词' }, saved).outlineText, input.outlineText)
   assert.throws(() => sanitizeWorkspace(item, { ...saved, outlineText: {} }, saved), /大纲内容无效/)
 })
+
+test('Bluesky 发布平台通过工作区校验并保持选择', async () => {
+  const { emptyWorkspace, sanitizeWorkspace } = await import('../src/workspace-schema.js')
+  const item = idea()
+  const current = emptyWorkspace(item)
+  const saved = sanitizeWorkspace(item, { ...current, publish: { ...current.publish, platform: 'Bluesky' } }, current)
+  assert.equal(saved.publish.platform, 'Bluesky')
+})

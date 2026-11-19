@@ -8,7 +8,7 @@ const invalid = () => new PublishError('INVALID_LOCAL_MEDIA', '本地发布素�
 
 // For verified snapshots under a Host-private directory, NOT caller-supplied workspace paths.
 // The descriptor is opened once; replacing its path cannot change the bytes of later parts.
-export async function withLocalUploadSource(root, snapshotPath, { filename, mime }, use) {
+export async function withLocalUploadSource(root, snapshotPath, { filename, mime, width, height, duration, frameRate }, use) {
   if (typeof snapshotPath !== 'string' || typeof filename !== 'string' || !filename || /[\\/\x00-\x1f\x7f]/.test(filename)) throw invalid()
   let file, sizeBytes
   try {
@@ -32,7 +32,7 @@ export async function withLocalUploadSource(root, snapshotPath, { filename, mime
   }
   try {
     return await use(Object.freeze({
-      filename, mime, sizeBytes,
+      filename, mime, sizeBytes, width, height, duration, frameRate,
       stream({ start = 0, end = sizeBytes - 1 } = {}) {
         if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end >= sizeBytes) throw invalid()
         // Each part has its own cursor. Destroying a part must not close the shared descriptor.

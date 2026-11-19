@@ -5,8 +5,8 @@ import { lang, t } from './i18n.js'
 export const STATUSES = ['idea', 'outline', 'draft', 'ready', 'published']
 export const STATUS_LABEL = { idea: '灵感', outline: '大纲', draft: '草稿', ready: '待发布', published: '已发布' }
 export const KIND_LABEL = { image: '图片', video: '视频', web: '网页', quote: '金句', note: '笔记' }
-export const PLATFORMS = ['公众号', '小红书', '抖音', 'B站', '视频号', 'TikTok', 'Instagram', 'YouTube', 'X']
-const OVERSEAS = new Set(['TikTok', 'Instagram', 'YouTube', 'X'])
+export const PLATFORMS = ['公众号', '小红书', '抖音', '快手', 'B站', '视频号', 'TikTok', 'Instagram', 'YouTube', 'Facebook', 'LinkedIn', 'X', 'Pinterest', 'Threads', 'Bluesky']
+const OVERSEAS = new Set(['TikTok', 'Instagram', 'YouTube', 'Facebook', 'LinkedIn', 'X', 'Pinterest', 'Threads', 'Bluesky'])
 /** 下拉框里的平台顺序：英文界面把海外平台放前面。 */
 export function platformChoices() {
   return lang() === 'en' ? [...PLATFORMS.filter(p => OVERSEAS.has(p)), ...PLATFORMS.filter(p => !OVERSEAS.has(p))] : PLATFORMS
@@ -18,7 +18,7 @@ export function styleIcon(style) {
 }
 export const PLATFORM_URL = {
   公众号: 'https://mp.weixin.qq.com/', 小红书: 'https://creator.xiaohongshu.com/publish/publish', 抖音: 'https://creator.douyin.com/creator-micro/content/upload',
-  B站: 'https://member.bilibili.com/platform/upload/video/frame', 视频号: 'https://channels.weixin.qq.com/platform/post/create', TikTok: 'https://www.tiktok.com/tiktokstudio/upload', Instagram: 'https://www.instagram.com/', YouTube: 'https://studio.youtube.com/', X: 'https://x.com/compose/post',
+  B站: 'https://member.bilibili.com/platform/upload/video/frame', 视频号: 'https://channels.weixin.qq.com/platform/post/create', TikTok: 'https://www.tiktok.com/tiktokstudio/upload', Instagram: 'https://www.instagram.com/', YouTube: 'https://studio.youtube.com/', Facebook: 'https://business.facebook.com/', LinkedIn: 'https://www.linkedin.com/feed/', X: 'https://x.com/compose/post', Pinterest: 'https://www.pinterest.com/', Threads: 'https://www.threads.com/',
 }
 
 export function hash(text) {

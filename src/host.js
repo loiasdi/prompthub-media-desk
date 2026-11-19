@@ -26,6 +26,8 @@ import { dshHome, Store } from './store.js'
 import { currentLang, platformName, tr, withLang } from './i18n.js'
 import { localizeSamples, samplesNeedLocale } from './seed.js'
 import { ContentAssets, MEDIA_MIME } from './content-assets.js'
+import { Publishing } from './publish/service.js'
+import { PublishError } from './publish/errors.js'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
 const MAX_JSON = 4_000_000
@@ -299,6 +301,27 @@ export async function route(ctx, store, desk, req, res) {
   const url = new URL(req.url || '/', 'http://local')
   const path = url.pathname.replace(/^\/media-desk\/?/, '')
   const method = req.method || 'GET'
+
+  if (path.startsWith('publish/')) {
+    const publishing = desk.publishing ??= new Publishing(store)
+    try {
+      if (method === 'GET' && path === 'publish/status') return json(res, 200, await publishing.status(url.searchParams.get('id')))
+      if (method === 'GET' && path === 'publish/options') return json(res, 200, await publishing.options(url.searchParams.get('platform')))
+      if (method !== 'POST') return json(res, 405, { error: tr('不支持的方法') })
+      const site = req.headers['sec-fetch-site']
+      if (site && site !== 'same-origin' && site !== 'none') return json(res, 403, { error: tr('拒绝跨站请求') })
+      if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) return json(res, 415, { error: '发布操作需要 JSON 请求' })
+      const body = await readJson(req)
+      if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: '发布请求无效' })
+      if (path === 'publish/prepare') return json(res, 200, { preparation: await publishing.prepare(body) })
+      if (path === 'publish/start') return json(res, 202, { job: await publishing.start(body) })
+      if (path === 'publish/review') return json(res, 200, { job: await publishing.review(body) })
+      return json(res, 404, { error: tr('接口不存在') })
+    } catch (err) {
+      const status = err.status || (err instanceof PublishError ? 502 : 500)
+      return json(res, status, { error: (err.status || err instanceof PublishError) ? err.message : '暂时无法完成发布操作，请先查看投稿记录' })
+    }
+  }
 
   if (method === 'GET' && path.startsWith('feishu/')) {
     const sync = desk.feishu ??= new FeishuSync(store)

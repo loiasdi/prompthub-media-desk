@@ -12,6 +12,7 @@ export function createBilibiliAdapter(config, { chunkBytes, ...transport } = {})
     refreshToken: client.refreshToken,
     account: client.account,
     categories: client.categories,
+    check: publisher.check,
     submit: publisher.submit,
     review: publisher.review,
   })

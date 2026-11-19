@@ -9,6 +9,6 @@ export function createYouTubeAdapter(config, transport) {
     authorizationUrl: client.authorizationUrl,
     exchangeCode: client.exchangeCode,
     refreshToken: client.refreshToken,
-    ...createYouTubePublisher(client),
+    ...createYouTubePublisher(client, transport),
   })
 }
