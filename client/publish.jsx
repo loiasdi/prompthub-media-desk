@@ -7,6 +7,8 @@ import { lang, t } from './i18n.js'
 import { Dialog, Icon } from './ui.jsx'
 import { API_PLATFORMS, INITIAL_PUBLISH_FIELDS, publishAccountIssue, publishOptions, publishReadiness } from './publish-readiness.js'
 import { flushWorkspace, formatBytes, prepareWorkspacePublish } from './workspace.js'
+import { openPublishSettings } from './publish-settings.jsx'
+import { useDesk } from './desk.js'
 
 const STATUS = { publishing: '正在投稿', pending_review: '平台处理中', published: '投稿完成', failed: '投稿失败', rejected: '平台拒绝', unknown: '请到平台核对' }
 const PRIVACY = { private: '私密', unlisted: '不公开列出', public: '公开' }
@@ -57,6 +59,8 @@ export function usePublishing(id, platformName, enabledMode) {
     } catch (err) { if (sequence === statusSequence.current) setStatusError(err.message) }
   }, [id])
   React.useEffect(() => { void refresh() }, [refresh])
+  const settingsOpen = useDesk(state => state.publishSettingsOpen)
+  React.useEffect(() => { if (!settingsOpen) { void refresh(); reload() } }, [settingsOpen, refresh])
   const configured = Boolean(platform && info?.platforms?.[platform])
   const jobs = info?.jobs || []
   const polling = jobs.some(job => job.status === 'publishing')
@@ -83,7 +87,7 @@ function Select({ label, value, onChange, children }) {
 export function PublishAccount({ publishing }) {
   const { configured, options, statusError } = publishing
   const detail = publishAccountIssue(publishing) || '已核对平台账号'
-  return <div className="md-publish-account"><Icon name="user" size={18} /><div><strong>{options?.account || t(configured ? '已配置发布账号' : '发布账号')}</strong><span>{t(detail)}</span></div>{statusError ? <button type="button" className="md-btn is-small" onClick={publishing.refresh}>{t('刷新')}</button> : options?.error ? <button type="button" className="md-btn is-small" onClick={publishing.reload}>{t('重试')}</button> : options?.account ? <button type="button" className="md-btn is-small" onClick={publishing.reload}>{t('重新核对账号')}</button> : null}</div>
+  return <div className="md-publish-account"><Icon name="user" size={18} /><div><strong>{options?.account || t(configured ? '已配置发布账号' : '发布账号')}</strong><span>{t(detail)}</span></div><button type="button" className="md-btn is-small" onClick={() => openPublishSettings(publishing.platform)}>{t('配置发布账号')}</button>{statusError ? <button type="button" className="md-btn is-small" onClick={publishing.refresh}>{t('刷新')}</button> : options?.error ? <button type="button" className="md-btn is-small" onClick={publishing.reload}>{t('重试')}</button> : options?.account ? <button type="button" className="md-btn is-small" onClick={publishing.reload}>{t('重新核对账号')}</button> : null}</div>
 }
 
 export function usePublishPreparation({ item, publishing, publish, video, cover, images }) {

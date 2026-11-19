@@ -829,3 +829,41 @@ button.md-receipt:hover { transform: translateX(2px); }
 .md-node.is-dim { opacity: .28; filter: saturate(.5); }
 .md-hero-related { margin-top: 10px; display: flex; gap: 10px; align-items: baseline; color: var(--ink2); font-size: 12.5px; line-height: 18px; animation: md-rise .5s var(--ease) both; }
 
+
+/* Publishing credentials: a bounded form with an adjacent reference guide. */
+.md-root .md-dialog.md-publish-settings { display: flex; flex-direction: column; overflow: hidden; padding: 20px 24px 0; }
+.md-publish-settings > .md-dialog-head { flex: none; margin-bottom: 16px; }
+.md-publish-settings-shell { flex: 1; min-height: 0; gap: 0; overflow: hidden; }
+.md-publish-settings-scroll { min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: 24px; }
+.md-root .md-publish-intro { margin: 0 0 20px; color: var(--ink3); font-size: 12px; line-height: 20px; max-width: 76ch; }
+.md-publish-settings-scroll > .md-field { max-width: 320px; margin-bottom: 24px; }
+.md-publish-settings-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 340px); align-items: start; gap: 32px; }
+.md-publish-credentials { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 20px; min-width: 0; }
+.md-root .md-publish-credentials > p { margin: 0; font-size: 12px; line-height: 20px; color: var(--ink2); }
+.md-publish-credentials > small { color: var(--ink3); font-size: 11.5px; line-height: 18px; }
+.md-publish-guide { grid-column: 2; grid-row: 1; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: var(--r-md); background: var(--hover); }
+.md-root .md-publish-guide summary { cursor: pointer; color: var(--ink); font-size: 13px; line-height: 20px; }
+.md-publish-guide summary strong { font-weight: 500; }
+.md-publish-guide-content { margin-top: 16px; color: var(--ink2); font-size: 12px; line-height: 20px; overflow-wrap: anywhere; }
+.md-root .md-publish-guide ol { display: flex; flex-direction: column; gap: 12px; margin: 0; padding-left: 20px; list-style: decimal; }
+.md-publish-guide li { padding-left: 4px; }
+.md-publish-guide li::marker { color: var(--ink3); font-variant-numeric: tabular-nums; }
+.md-publish-guide nav { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.md-root .md-publish-guide a { text-decoration: none; color: var(--ink); font-size: 12px; line-height: 20px; height: auto; padding: 4px 8px; background: var(--card); }
+.md-root .md-publish-guide p { margin: 0 0 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.md-publish-guide small { display: block; color: var(--ink3); font-size: 11px; line-height: 18px; }
+.md-root .md-publish-check { display: flex; align-items: flex-start; gap: 8px; color: var(--ink2); font-size: 12px; line-height: 20px; }
+.md-root .md-publish-check > span { display: flex; align-items: flex-start; gap: 8px; }
+.md-root .md-publish-settings input[type="checkbox"] { appearance: auto; flex: 0 0 16px; width: 16px; height: 16px; min-height: 0; margin: 2px 0; padding: 0; border-radius: 3px; accent-color: var(--ink); }
+.md-root .md-publish-actions { flex: none; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin: 0; padding: 16px 0; border-top: 1px solid var(--line); background: var(--card); }
+@media (max-width: 760px) {
+  .md-root .md-dialog.md-publish-settings { padding: 16px 16px 0; }
+  .md-publish-settings-grid { display: flex; flex-direction: column; gap: 24px; }
+  .md-publish-guide, .md-publish-credentials { width: 100%; box-sizing: border-box; }
+  .md-publish-settings-scroll > .md-field { max-width: none; }
+}
+.md-root .md-settings-publishing { padding: 8px 0; gap: 16px; }
+.md-root .md-settings-publishing h3 { margin: 0 0 8px; font-size: 14px; font-weight: 500; line-height: 20px; }
+.md-root .md-settings-publishing p { margin: 0; color: var(--ink2); font-size: 12px; line-height: 20px; }
+.md-settings-publishing > .md-btn { align-self: flex-start; }
+.md-settings-publishing > small { color: var(--ink3); font-size: 11.5px; line-height: 18px; }

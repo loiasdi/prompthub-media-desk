@@ -8,9 +8,10 @@ import { PublishError } from './errors.js'
 import { withLocalUploadSource } from './local-source.js'
 import { PUBLISH_PLATFORMS, publishFormats, publishSelectionIssue, publishUsesArticleImages, publishUsesCover } from './capabilities.js'
 import { articleImageIds, articleImageSyntaxIssue } from './article-images.js'
-import { accountOf, canReviewPlatform, categoriesOf, categoryTitleOf, configuredPlatform, platformDraft } from './platforms.js'
+import { accountOf, canReviewPlatform, categoriesOf, categoryTitleOf, platformDraft } from './platforms.js'
 import { activeRecord, readPublishRecords, visibleRecord, writePublishRecords } from './records.js'
 import { assetSummary, inspectSelection } from './snapshot.js'
+import { PublishConfig } from './config.js'
 
 const PREPARED_MS = 15 * 60_000
 const EXECUTE_MS = 45 * 60_000
@@ -28,9 +29,10 @@ const exposed = record => record && {
 const failureMessage = (err, fallback) => err instanceof PublishError || (err.status >= 400 && err.status < 500) ? err.message : fallback
 
 export class Publishing {
-  constructor(store, { resolvePlatform = configuredPlatform, snapshotRoot = tmpdir() } = {}) {
+  constructor(store, { resolvePlatform, snapshotRoot = tmpdir() } = {}) {
     this.store = store
-    this.resolvePlatform = resolvePlatform
+    this.config = new PublishConfig()
+    this.resolvePlatform = resolvePlatform || (platform => this.config.resolve(platform))
     this.snapshotRoot = snapshotRoot
   }
 

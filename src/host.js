@@ -304,7 +304,9 @@ export async function route(ctx, store, desk, req, res) {
 
   if (path.startsWith('publish/')) {
     const publishing = desk.publishing ??= new Publishing(store)
+    res.setHeader('cache-control', 'no-store')
     try {
+      if (method === 'GET' && path === 'publish/config') return json(res, 200, publishing.config.public())
       if (method === 'GET' && path === 'publish/status') return json(res, 200, await publishing.status(url.searchParams.get('id')))
       if (method === 'GET' && path === 'publish/options') return json(res, 200, await publishing.options(url.searchParams.get('platform')))
       if (method !== 'POST') return json(res, 405, { error: tr('不支持的方法') })
@@ -313,6 +315,8 @@ export async function route(ctx, store, desk, req, res) {
       if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) return json(res, 415, { error: '发布操作需要 JSON 请求' })
       const body = await readJson(req)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: '发布请求无效' })
+      if (path === 'publish/config') return json(res, 200, await publishing.config.save(body))
+      if (path === 'publish/test') return json(res, 200, await publishing.config.test(body.platform))
       if (path === 'publish/prepare') return json(res, 200, { preparation: await publishing.prepare(body) })
       if (path === 'publish/start') return json(res, 202, { job: await publishing.start(body) })
       if (path === 'publish/review') return json(res, 200, { job: await publishing.review(body) })

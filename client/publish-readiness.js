@@ -43,7 +43,7 @@ export function publishAccountIssue({ platform, configured, known, statusError, 
   if (statusError) return statusError
   if (!platform) return '此平台使用手动发布'
   if (!known) return '正在检查投稿配置'
-  if (!configured) return '请先在 DSH Host 配置并启用自有平台账号'
+  if (!configured) return '请先配置并启用此平台发布账号'
   if (options?.error) return options.error
   if (options?.account) return ''
   return apiMode ? '正在核对授权账号…' : '选择 API 投稿后核对授权账号'

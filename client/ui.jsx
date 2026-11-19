@@ -76,7 +76,7 @@ export function Segmented({ value, options, onChange, label }) {
   )
 }
 
-export function Dialog({ title, onClose, children, width = 440 }) {
+export function Dialog({ title, onClose, children, width = 440, className = '' }) {
   const ref = React.useRef(null)
   // onClose 每次渲染都可能是新函数；放进 ref，免得每打一个字焦点就被抢走
   const close = React.useRef(onClose)
@@ -95,7 +95,7 @@ export function Dialog({ title, onClose, children, width = 440 }) {
   }, [])
   return (
     <div className="md-dialog-mask" onPointerDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
-      <div className="md-dialog" role="dialog" aria-modal="true" aria-label={title} style={{ width }} ref={ref}>
+      <div className={`md-dialog ${className}`} role="dialog" aria-modal="true" aria-label={title} style={{ width }} ref={ref}>
         <div className="md-dialog-head">
           <h2>{title}</h2>
           <IconButton icon="close" label={t('关闭')} onClick={onClose} />

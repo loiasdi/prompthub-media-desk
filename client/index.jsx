@@ -10,6 +10,7 @@ import { StyleView } from './style.jsx'
 import { ScheduleView } from './schedule.jsx'
 import { ModelButton, ModelPicker } from './modelpick.jsx'
 import { SettingsDialog } from './settings.jsx'
+import { PublishSettingsDialog } from './publish-settings.jsx'
 import { Studio } from './studio.jsx'
 import css from './styles.css'
 import workspaceCss from './content-workspace.css'
@@ -207,6 +208,7 @@ export function Desk() {
       {ready ? <CaptureDialog /> : null}
       <FormDialog />
       {ready ? <SettingsDialog /> : null}
+      {ready ? <PublishSettingsDialog /> : null}
       {ready ? <ModelPicker /> : null}
       <Toast />
     </div>

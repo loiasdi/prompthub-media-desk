@@ -3,6 +3,7 @@ import React from 'react'
 import { saveSettings, setDesk, testImage, useDesk } from './desk.js'
 import { t, useLang } from './i18n.js'
 import { Dialog, Icon } from './ui.jsx'
+import { openPublishSettings } from './publish-settings.jsx'
 
 // 常见服务的 OpenAI 兼容地址，模型名以各家文档为准。label 是中文原文，显示时再翻译
 const PRESETS = [
@@ -25,6 +26,7 @@ export function SettingsDialog() {
   useLang()
   const open = useDesk(s => s.settingsOpen)
   const settings = useDesk(s => s.settings)
+  const publishingOpen = useDesk(s => s.publishSettingsOpen)
   const [form, setForm] = React.useState(null)
   const [testing, setTesting] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
@@ -41,7 +43,7 @@ export function SettingsDialog() {
     setForm({ source: image.source ?? 'http', language: settings.language ?? 'auto', baseUrl: image.baseUrl ?? '', model: image.model ?? '', apiKey: '', size: image.size ?? '', quality: image.quality ?? '', toolSize: image.toolSize ?? '1536x1024', toolQuality: image.toolQuality ?? '', extra: image.extra ?? '', exportDir: settings.exportDir ?? '', documentDir: settings.documentDir ?? '', trashRetentionDays: settings.trashRetentionDays ?? 7, imageCount: settings.imageCount, shotCount: settings.shotCount })
     setSample(null)
   }, [open, settings])
-  if (!open || !form) return null
+  if (!open || !form || publishingOpen) return null
   const close = () => setDesk({ settingsOpen: false })
   const set = (key, value) => setForm(f => ({ ...f, [key]: value }))
   const payload = () => ({
@@ -62,7 +64,7 @@ export function SettingsDialog() {
       }}>
         <fieldset disabled={saving || testing} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: 'contents' }}>
         <div className="md-capture-tabs" role="tablist" aria-label={t('设置分类')}>
-          {[['general', '普通设置'], ['api', 'API 设置']].map(([id, label]) => <button type="button" key={id} id={`md-settings-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`md-settings-panel-${id}`} className={tab === id ? 'is-on' : ''} onClick={() => setTab(id)}>{t(label)}</button>)}
+          {[['general', '普通设置'], ['api', 'API 设置'], ['publishing', '发布账号']].map(([id, label]) => <button type="button" key={id} id={`md-settings-tab-${id}`} role="tab" aria-selected={tab === id} aria-controls={`md-settings-panel-${id}`} className={tab === id ? 'is-on' : ''} onClick={() => setTab(id)}>{t(label)}</button>)}
         </div>
         {tab === 'general' ? <section className="md-settings-panel" role="tabpanel" id="md-settings-panel-general" aria-labelledby="md-settings-tab-general">
         <div className="md-field">
@@ -94,7 +96,7 @@ export function SettingsDialog() {
           <label className="md-field"><span>{t('配图数量')}</span><input type="number" min="0" max="4" value={form.imageCount} onChange={e => set('imageCount', e.target.value)} /></label>
           <label className="md-field"><span>{t('分镜格数')}</span><input type="number" min="0" max="12" value={form.shotCount} onChange={e => set('shotCount', e.target.value)} /></label>
         </div>
-        </section> : <section className="md-settings-panel" role="tabpanel" id="md-settings-panel-api" aria-labelledby="md-settings-tab-api">
+        </section> : tab === 'api' ? <section className="md-settings-panel" role="tabpanel" id="md-settings-panel-api" aria-labelledby="md-settings-tab-api">
 
         <div className="md-field">
           <span>{t('生图来源')}</span>
@@ -149,6 +151,13 @@ export function SettingsDialog() {
           </>
         ) : null}
         {sample ? <img className="md-test-sample" src={sample} alt={t('测试图')} /> : null}
+        </section> : <section className="md-settings-panel md-settings-publishing" role="tabpanel" id="md-settings-panel-publishing" aria-labelledby="md-settings-tab-publishing">
+          <div>
+            <h3>{t('平台发布账号')}</h3>
+            <p>{t('管理各平台的应用凭据和授权账号，查看获取步骤，并验证已保存的账号。')}</p>
+          </div>
+          <button type="button" className="md-btn" onClick={() => openPublishSettings()}>{t('配置发布账号')}</button>
+          <small>{t('凭据保存在 Host 本地；保存配置不会发布内容。')}</small>
         </section>}
         <div className="md-form-foot">
           {tab === 'api' ? <button type="button" className="md-btn" disabled={testing} onClick={async () => {
@@ -159,7 +168,7 @@ export function SettingsDialog() {
           }}>{testing ? <span className="md-shimmer">{t('正在试画…')}</span> : t('试画一张')}</button> : null}
           <span style={{ flex: 1 }} />
           <button type="button" className="md-btn" onClick={close}>{t('取消')}</button>
-          <button type="submit" className="md-btn is-primary">{t('保存')}</button>
+          {tab !== 'publishing' ? <button type="submit" className="md-btn is-primary">{t('保存')}</button> : null}
         </div>
         </fieldset>
         {saving ? <small role="status">{t('正在保存设置与迁移文件，请稍候…')}</small> : null}
