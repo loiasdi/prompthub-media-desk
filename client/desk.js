@@ -8,7 +8,7 @@ const BASE = 'media-desk/'
 let snapshot = {
   state: null, model: null, modelOk: null, modelError: null, canUndo: false, error: null,
   view: 'home', mode: 'scatter', focusId: null, studioTab: 'article', dockOpen: true, studioDock: false, chatQuote: null, query: '', kindFilter: 'all', related: null,
-  live: {}, settings: null, settingsOpen: false, modelPickOpen: false, thinking: false, toast: null, capture: null, dialog: null,
+  live: {}, settings: null, settingsOpen: false, modelPickOpen: false, thinking: false, toast: null, progressToast: null, capture: null, dialog: null,
 }
 const listeners = new Set()
 
@@ -44,6 +44,15 @@ export function toast(text, { undo = false, error = false } = {}) {
   clearTimeout(toastTimer)
   setDesk({ toast: { text, undo, error, key: Date.now() } })
   toastTimer = setTimeout(() => setDesk({ toast: null }), undo || text.length > 24 ? 6000 : 3200)
+}
+
+// Progress toasts live until the request settles, independently of timed feedback.
+export function startProgressToast(text) {
+  const notice = { text }
+  setDesk({ progressToast: notice })
+  return () => {
+    if (snapshot.progressToast === notice) setDesk({ progressToast: null })
+  }
 }
 
 export function report(err) {

@@ -109,3 +109,12 @@ export async function downloadCover(options, name) {
   link.download = `${String(name).replace(/[\\/:*?"<>|\s]+/g, ' ').trim().slice(0, 40) || t('视频封面')}.jpg`
   link.click()
 }
+
+// Open on a real result, not an empty default aspect ratio.
+export function preferredCoverRatio(design, ratios, selectedCover) {
+  return (selectedCover && ratios.find(ratio => design.variants[ratio].imageIds.includes(selectedCover)))
+    || ratios.find(ratio => design.variants[ratio].imageIds.length)
+    || ratios.find(ratio => design.variants[ratio].prompt.trim())
+    || ratios.find(ratio => design.ratios.includes(ratio))
+    || ratios[0]
+}

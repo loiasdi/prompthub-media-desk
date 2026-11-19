@@ -591,6 +591,11 @@ button.md-receipt:hover { transform: translateX(2px); }
 .md-dropzone small { color: var(--ink3); font-size: 12px; }
 .md-toast { position: absolute; z-index: 70; left: 50%; bottom: 76px; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; max-width: min(520px, calc(100% - 32px)); padding: 8px 14px; border-radius: var(--r-lg); background: var(--primary); color: var(--on-primary); box-shadow: var(--dsw-elevation-prominent); font-size: 13px; line-height: 20px; animation: md-toast .5s cubic-bezier(.2, 1.3, .4, 1) both; }
 @keyframes md-toast { from { opacity: 0; transform: translate(-50%, 14px) scale(.96); } }
+.md-toast.is-progress { inset: auto 16px 16px auto; transform: none; pointer-events: none; animation: md-toast-enter-bottom .2s var(--ease) both; }
+.md-toast.is-progress svg { flex: none; animation: md-toast-spin 1.1s linear infinite; }
+@keyframes md-toast-enter-bottom { from { opacity: 0; transform: translateY(6px); } }
+@keyframes md-toast-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .md-toast.is-progress, .md-toast.is-progress svg { animation: none; } }
 .md-toast.is-error { background: #c33a33; color: #fff; }
 .md-root .md-toast button { flex: none; margin-left: 6px; font-weight: 500; color: inherit; text-decoration: underline dotted; text-underline-offset: 3px; }
 

@@ -22,8 +22,8 @@ export function imageBuffer(buffer) {
 }
 
 function redact(text, key) {
-  const clean = String(text ?? '').slice(0, 300)
-  return key ? clean.split(key).join('***') : clean
+  const clean = String(text ?? '')
+  return (key ? clean.split(key).join('***') : clean).slice(0, 300)
 }
 
 function explain(status, detail) {
@@ -98,20 +98,20 @@ function sameOrigin(href, baseUrl) {
   }
 }
 
-async function downloadImage(entry, image, fetchImpl, signal) {
+async function downloadImage(entry, image, fetchImpl, signal, { strictDownload = false } = {}) {
   const candidates = imageUrlCandidates(entry.url, image.baseUrl)
-  if (!candidates.length) throw permanent(new Error(tr('生图服务返回的图片地址无法识别：{url}', { url: String(entry.url).slice(0, 120) })))
+  if (!candidates.length) throw permanent(new Error(tr('生图服务返回的图片地址无法识别：{url}', { url: redact(entry.url, image.apiKey).slice(0, 120) })))
   let last = null
   for (const href of candidates) {
     const trusted = sameOrigin(href, image.baseUrl)
     let url
     try {
-      url = trusted ? new URL(href) : await assertPublicUrl(href)
+      url = trusted && !strictDownload ? new URL(href) : await assertPublicUrl(href)
     } catch (err) {
       last = permanent(err)
       continue
     }
-    const download = await fetchImpl(url, { signal, ...(trusted && image.apiKey ? { headers: { authorization: `Bearer ${image.apiKey}` } } : {}) })
+    const download = await fetchImpl(url, { signal, ...(strictDownload ? { redirect: 'error' } : {}), ...(trusted && image.apiKey ? { headers: { authorization: `Bearer ${image.apiKey}` } } : {}) })
     if (!download.ok) {
       last = new Error(tr('下载图片失败（{status}）', { status: download.status }))
       last.retryable = download.status >= 500
@@ -131,6 +131,10 @@ async function requestOnce(image, prompt, fetchImpl, signal) {
     body: JSON.stringify(body),
     signal,
   })
+  return readImageResponse(res, image, fetchImpl, signal)
+}
+
+export async function readImageResponse(res, image, fetchImpl, signal, options) {
   const raw = await res.text()
   let data = null
   try {
@@ -146,7 +150,7 @@ async function requestOnce(image, prompt, fetchImpl, signal) {
   // OpenAI 系放在 data[0]，部分国内服务放在 images[0]
   const entry = data?.data?.[0] ?? data?.images?.[0]
   if (entry?.b64_json) return { buffer: Buffer.from(entry.b64_json, 'base64'), revisedPrompt: entry.revised_prompt }
-  if (entry?.url) return downloadImage(entry, image, fetchImpl, signal)
+  if (entry?.url) return downloadImage(entry, image, fetchImpl, signal, options)
   const error = new Error(entry?.file_path ? tr('生图服务只返回了它本机的文件路径，没有可下载的地址') : tr('生图服务没有返回图片'))
   error.retryable = !data
   throw error

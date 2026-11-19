@@ -1,11 +1,12 @@
 import { BRAND_NAME } from '../src/brand.js'
 import { playableVideo, sourceKind, sourceImage } from '../src/inspiration-source.js'
 import { FeishuSyncDialog } from './feishu-sync.jsx'
+import { preferredCoverRatio } from './cover.js'
 import { ArticleImagePicker, PublishAccount, PublishChecklist, PublishControls, PublishHistory, usePublishPreparation, usePublishing } from './publish.jsx'
 import { publishUsesArticleImages, publishUsesCover } from '../src/publish/capabilities.js'
 import { articleImageIds } from '../src/publish/article-images.js'
 import React from 'react'
-import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, toast, useDesk } from './desk.js'
+import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, startProgressToast, toast, useDesk } from './desk.js'
 import { t, useLang } from './i18n.js'
 import { Dialog, Icon, IconButton, Segmented } from './ui.jsx'
 import { PLATFORMS, STATUSES, STATUS_LABEL, displayItem } from './util.js'
@@ -13,7 +14,7 @@ import { ASSET_ROLE_NAMES, cancelWorkspaceImport, downloadText, importWorkspaceF
 
 import { copyVideoPromptSection, indexVideoPrompt, MAX_PROMPT_TEXT } from '../src/video-prompt-document.js'
 
-import { COVER_RATIOS, COVER_STYLES } from '../src/cover-design-schema.js'
+import { COVER_RATIOS, COVER_STYLES, coverReferenceImages } from '../src/cover-design-schema.js'
 
 const TYPES = [{ id: 'all', name: '全部素材', icon: 'folder' }, { id: 'video', name: '视频', icon: 'film' }, { id: 'image', name: '图片', icon: 'image' }, { id: 'audio', name: '音频', icon: 'play' }]
 const ROLE_NAMES = ASSET_ROLE_NAMES
@@ -150,16 +151,34 @@ function CoverDesignPage({ item, draft, update, assets }) {
   const fileInput = React.useRef(null)
   const [importing, setImporting] = React.useState(false)
   const design = draft.coverDesign
-  const [ratio, setRatio] = React.useState('3:4')
+  const [viewedRatio, setRatio] = React.useState(null)
+  const ratio = viewedRatio ?? preferredCoverRatio(design, COVER_RATIOS, draft.selectedCover)
   const [busy, setBusy] = React.useState('')
+  const [promptError, setPromptError] = React.useState('')
+  const [imageError, setImageError] = React.useState('')
   const [titles, setTitles] = React.useState([])
   const model = useDesk(s => s.model)
   const imageReady = useDesk(s => s.settings?.imageReady)
+  const imageSettings = useDesk(s => s.settings?.image)
+  const usesImageApi = imageSettings?.source === 'http'
   const patch = changes => update(d => ({ coverDesign: { ...d.coverDesign, ...changes } }))
   const variant = design.variants[ratio]
   const images = assets.filter(a => a.type === 'image')
+  const referenceImages = coverReferenceImages(design, assets)
   const patchVariant = changes => update(d => ({ coverDesign: { ...d.coverDesign, variants: { ...d.coverDesign.variants, [ratio]: { ...d.coverDesign.variants[ratio], ...changes } } } }))
   const selectedRefs = [...new Set([...design.personIds, ...design.materialIds])]
+  const imagesById = new Map(images.map(asset => [asset.id, asset]))
+  const [latestCover, ...earlierCovers] = variant.imageIds.toReversed().map(id => imagesById.get(id)).filter(Boolean)
+  const renderCover = (asset, isLatest = false) => <figure className={isLatest ? 'md-cover-hero' : undefined} key={asset.id}>
+    <a className="md-cover-canvas" href={asset.src} target="_blank" rel="noreferrer" aria-label={t('预览 {name}', { name: asset.name })}><img src={asset.src} alt={design.title || asset.name} loading={isLatest ? undefined : 'lazy'} /></a>
+    <figcaption>
+      {asset.width && asset.height ? <span>{asset.width} × {asset.height}</span> : null}
+      <div className="md-work-actions">
+        <button type="button" className="md-btn is-small" aria-pressed={draft.selectedCover === asset.id} onClick={() => update({ selectedCover: asset.id })}>{t(draft.selectedCover === asset.id ? '已选发布封面' : '设为发布封面')}</button>
+        <a className="md-inline-link" href={asset.src} download={asset.name}>{t('下载')}</a>
+      </div>
+    </figcaption>
+  </figure>
   const importImages = async files => {
     if (!files.length) return
     setImporting(true)
@@ -167,85 +186,117 @@ function CoverDesignPage({ item, draft, update, assets }) {
     catch (err) { toast(err.message, { error: true }) }
     finally { setImporting(false) }
   }
-  const selectImages = key => <div className="md-cover-reference-grid">{images.map(asset => <label key={asset.id}><input type="checkbox" checked={design[key].includes(asset.id)} onChange={event => patch({ [key]: event.target.checked ? [...design[key], asset.id] : design[key].filter(id => id !== asset.id) })} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}{!images.length ? <p>{t('先到素材页导入参考图片')}</p> : null}</div>
+  const selectImages = key => <div className="md-cover-reference-grid">{referenceImages.map(asset => <label key={asset.id}><input type="checkbox" checked={design[key].includes(asset.id)} onChange={event => patch({ [key]: event.target.checked ? [...design[key], asset.id] : design[key].filter(id => id !== asset.id) })} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}{!referenceImages.length ? <p>{t('先到素材页导入参考图片')}</p> : null}</div>
   const generateTitles = async () => {
     setBusy('titles')
+    const dismiss = startProgressToast(t('正在推荐标题…'))
     try { setTitles((await runCoverAction(item, 'cover/titles', {})).titles) }
     catch (err) { toast(err.message, { error: true }) }
-    finally { setBusy('') }
+    finally { dismiss(); setBusy('') }
   }
   const generatePrompts = async () => {
+    setPromptError('')
     setBusy('prompts')
+    const dismiss = startProgressToast(t('正在按 Skill 设计提示词…'))
     try {
       const result = await runCoverAction(item, 'cover/prompts', {})
       update(d => ({ coverDesign: { ...d.coverDesign, variants: Object.fromEntries(COVER_RATIOS.map(r => [r, { ...d.coverDesign.variants[r], ...(result.variants[r] ? { prompt: result.variants[r] } : {}) }])) } }))
+      if (!result.variants[ratio]) setRatio(COVER_RATIOS.find(r => result.variants[r]) || ratio)
+      setImageError('')
       toast(t('提示词已生成'))
-    } catch (err) { toast(err.message, { error: true }) }
-    finally { setBusy('') }
+    } catch (err) { setPromptError(err.message) }
+    finally { dismiss(); setBusy('') }
   }
   const generateImage = async () => {
+    setImageError('')
     setBusy('image')
+    const dismiss = startProgressToast(t('正在生成封面图…'))
     try {
       const result = await runCoverAction(item, 'cover/image', { ratio })
       update(d => ({ coverDesign: { ...d.coverDesign, variants: { ...d.coverDesign.variants, [ratio]: { ...d.coverDesign.variants[ratio], imageIds: [...d.coverDesign.variants[ratio].imageIds, result.asset.id] } } }, edits: { ...d.edits, [result.asset.id]: { ...d.edits[result.asset.id], role: 'cover' } } }))
       toast(t('封面已加入素材库，请检查文字、人物与比例'))
-    } catch (err) { toast(err.message, { error: true }) }
-    finally { setBusy('') }
+    } catch (err) { setImageError(err.message) }
+    finally { dismiss(); setBusy('') }
   }
-  const task = `使用 atutun-xhs-cover Skill。用户本次要求优先于默认模板。\n封面文字：${design.title}\n风格：${design.style}\n标题用色：${design.colors || '无固定用色'}\n本次要求：${design.requirements}\n目标比例：${design.ratios.join('、')}，每种比例独立构图。\n参考图按顺序上传：\n${[...design.personIds.map(id => [id, '人物']), ...design.materialIds.map(id => [id, '参考素材（按画面判断用途，不额外添加人物）']), ...design.colorIds.map(id => [id, '标题用色参考'])].map(([id, role], i) => `${i + 1}. ${role}：${images.find(a => a.id === id)?.name || ''}`).join('\n')}\n\n生成提示词后，使用 ImageGen 按选定比例生成封面。`
+  const designBrief = `使用 atutun-xhs-cover Skill。用户本次要求优先于默认模板。\n封面文字：${design.title}\n风格：${design.style}\n标题用色：${design.colors || '无固定用色'}\n本次要求：${design.requirements}\n目标比例：${design.ratios.join('、')}，每种比例独立构图。\n参考图按顺序上传：\n${[...design.personIds.map(id => [id, '人物']), ...design.materialIds.map(id => [id, '参考素材（按画面判断用途，不额外添加人物）']), ...design.colorIds.map(id => [id, '标题用色参考'])].map(([id, role], i) => `${i + 1}. ${role}：${images.find(a => a.id === id)?.name || ''}`).join('\n')}`
+  const promptOnly = '只输出完整提示词，不调用生图工具。'
+  const task = `${designBrief}\n\n${promptOnly}`
   const illustrations = design.illustrations || []
   const patchIllustration = (id, changes) => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: (d.coverDesign.illustrations || []).map(row => row.id === id ? { ...row, ...changes } : row) } }))
   const illustrationTask = row => `正文配图：${row.title || '未命名配图'}\n比例：${row.ratio}\n设计要求：${row.requirements || '根据稿件内容设计，与封面保持视觉一致；按内容决定是否需要文字，不自动重复封面大标题。'}\n${row.prompt ? `已有提示词：${row.prompt}` : ''}`
-  const combinedTask = `${task}\n\n同时设计以下正文配图，与封面统一配色、人物和视觉风格。共用上方参考图，分别输出每张图的完整提示词，再使用 ImageGen 逐张生成。\n稿件正文：\n${item.production?.article || item.body || ''}\n\n${illustrations.map(illustrationTask).join('\n\n')}`
+  const combinedTask = `${designBrief}\n\n同时设计以下正文配图，与封面统一配色、人物和视觉风格。共用上方参考图，分别输出封面和每张配图的完整提示词。${promptOnly}\n稿件正文：\n${item.production?.article || item.body || ''}\n\n${illustrations.map(illustrationTask).join('\n\n')}`
   return <div className="md-production-page md-cover-design-page">
-    <div className="md-production-heading"><div><h2>{t('配图与封面')}</h2><p>{t('共用参考素材，组合设计一套封面与正文配图')}</p></div></div>
-    <div className="md-visual-batch"><span>{t('封面')} · {illustrations.length} {t('张配图')}</span><button type="button" className="md-btn is-small" onClick={() => copy(combinedTask)}>{t('组合复制：封面＋配图')}</button></div>
+    <div className="md-production-heading"><div><h2>{t('配图与封面')}</h2><p>{t('共用参考素材，组合设计一套封面与正文配图')}</p></div><button type="button" className="md-btn is-small" onClick={() => copy(combinedTask)}>{t('组合复制：封面＋配图')}</button></div>
     <input ref={fileInput} type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden multiple onChange={e => { importImages([...e.target.files]); e.target.value = '' }} />
     <fieldset className="md-cover-fieldset" disabled={Boolean(busy) || importing}>
-    <section className="md-work-panel md-cover-simple-brief">
-      <div className="md-work-panel-title"><h3>{t('参考图片')}</h3><button type="button" className="md-btn is-small" onClick={() => fileInput.current?.click()}><Icon name="plus" size={13} />{t(importing ? '正在导入…' : '上传图片')}</button></div>
-      {images.length ? <div className="md-cover-reference-grid">{images.map(asset => <label key={asset.id}><input type="checkbox" checked={selectedRefs.includes(asset.id)} onChange={e => {
-        if (e.target.checked) patch({ materialIds: [...design.materialIds, asset.id] })
-        else patch({ materialIds: design.materialIds.filter(id => id !== asset.id), personIds: design.personIds.filter(id => id !== asset.id) })
-      }} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}</div> : <p className="md-cover-empty">{t('上传视频截图或素材图片，也可以直接使用素材库里的图片')}</p>}
-      <Field label="封面文字"><input value={design.title} placeholder={t('例如：200+自拍动作素材上新')} onChange={e => patch({ title: e.target.value })} /></Field>
-      <div className="md-cover-title-tools"><button type="button" onClick={() => patch({ title: item.production?.title || item.title })}>{t('使用当前内容标题')}</button><button type="button" disabled={!model} onClick={generateTitles}>{t('帮我想标题')}</button></div>
-      {titles.map(title => <button type="button" className="md-btn md-cover-title-option" key={title} onClick={() => patch({ title })}>{title}</button>)}
-      <Field label="补充要求（选填）"><textarea rows={3} value={design.requirements} placeholder={t('例如：文字放中间，不加真人，贴纸拼贴风。不填就交给 Skill 设计。')} onChange={e => patch({ requirements: e.target.value })} /></Field>
-      <details className="md-cover-options"><summary>{t('更多设置（选填）')}</summary>
-        <Field label="封面风格"><select value={design.style} onChange={e => patch({ style: e.target.value })}>{COVER_STYLES.map(style => <option key={style} value={style}>{t(style)}</option>)}</select></Field>
-        <Field label="标题用色"><input value={design.colors} placeholder={t('留空，交给 Skill 搭配')} onChange={e => patch({ colors: e.target.value })} /></Field>
-        <Field label="生成比例"><div className="md-cover-ratios">{COVER_RATIOS.map(r => <label key={r}><input type="checkbox" checked={design.ratios.includes(r)} onChange={e => patch({ ratios: e.target.checked ? [...design.ratios, r] : design.ratios.filter(x => x !== r) })} />{r}</label>)}</div></Field>
-        <details><summary>{t('指定人物参考')}</summary>{selectImages('personIds')}</details>
-        <details><summary>{t('参考过往封面配色')}</summary>{selectImages('colorIds')}</details>
-      </details>
-      <footer className="md-cover-simple-submit">
-        {model ? <><button type="button" className="md-btn is-primary" disabled={!design.title.trim() || !design.ratios.length} onClick={generatePrompts}><Icon name="image" size={15} />{t('生成封面提示词')}</button><button type="button" className="md-btn" disabled={!design.title.trim()} onClick={() => copy(task)}>{t('复制到 Skill 对话')}</button></> : <button type="button" className="md-btn is-primary" disabled={!design.title.trim()} onClick={() => copy(task)}><Icon name="copy" size={15} />{t('复制到 Skill 对话')}</button>}
-        <span>{design.ratios.join(' · ')}</span>
-      </footer>
-      {!model ? <p className="md-cover-preview-note">{t('这里暂未连接模型。复制后，粘贴到你平时的 Skill 对话，并附上选中的参考图即可。')}</p> : null}
-    </section>
-    <details className="md-work-panel md-cover-versions" open={COVER_RATIOS.some(r => design.variants[r].prompt || design.variants[r].imageIds.length) ? true : undefined}><summary>{t('查看结果 / 粘贴已有提示词')}</summary>
-      <div className="md-work-panel-title"><h3>{t('封面版本')}</h3><div className="md-work-actions">{COVER_RATIOS.map(r => <button type="button" key={r} className={`md-btn is-small ${ratio === r ? 'is-primary' : ''}`} aria-pressed={ratio === r} onClick={() => setRatio(r)}>{r}</button>)}</div></div>
-      <Field label="封面提示词"><textarea rows={12} value={variant.prompt} maxLength={50000} placeholder={t('使用 Skill 生成，或粘贴这个比例的完整提示词')} onChange={e => patchVariant({ prompt: e.target.value })} /></Field>
-      <div className="md-work-actions"><button type="button" className="md-btn" disabled={!variant.prompt} onClick={() => copy(variant.prompt)}>{t('复制提示词')}</button><button type="button" className="md-btn" disabled={!variant.prompt} onClick={() => downloadText(variant.prompt, `${design.title || item.title}-${ratio.replace(':', 'x')}.txt`)}>{t('导出提示词')}</button><button type="button" className="md-btn is-primary" disabled={!imageReady || !variant.prompt.trim()} onClick={generateImage}>{t('生成封面图')}</button></div>
-      <p>{t('生成图为候选封面；请检查标题、人物和实际画幅后再选为发布封面')}</p>
-      <div className="md-cover-generated">{variant.imageIds.map(id => assets.find(a => a.id === id)).filter(Boolean).map(asset => <figure key={asset.id}><a href={asset.src} target="_blank" rel="noreferrer"><img src={asset.src} alt={design.title || t('封面')} /></a><figcaption>{asset.width && asset.height ? <span>{asset.width} × {asset.height}</span> : null}<button type="button" className="md-btn is-small" onClick={() => update({ selectedCover: asset.id })}>{t(draft.selectedCover === asset.id ? '已选发布封面' : '设为发布封面')}</button><a href={asset.src} download={asset.name}>{t('下载')}</a></figcaption></figure>)}</div>
-    </details>
+    <div className="md-cover-workbench">
+      <section className="md-work-panel md-cover-versions" aria-labelledby="md-cover-result-heading">
+        <div className="md-work-panel-title md-cover-result-header">
+          <h3 id="md-cover-result-heading">{t('封面结果')}</h3>
+          <div className="md-cover-result-ratios" role="group" aria-label={t('封面版本')}>
+            {COVER_RATIOS.map(r => {
+              const hasResult = Boolean(design.variants[r].prompt.trim() || design.variants[r].imageIds.length)
+              return <button type="button" key={r} className={`md-btn is-small ${ratio === r ? 'is-primary' : ''}`} aria-pressed={ratio === r} aria-label={hasResult ? t('{ratio}，已有结果', { ratio: r }) : undefined} onClick={() => { setRatio(r); setImageError('') }}>{r}{hasResult ? <span className="md-cover-result-dot" aria-hidden="true" /> : null}</button>
+            })}
+          </div>
+        </div>
+        {latestCover ? renderCover(latestCover, true) : <div className="md-cover-no-result">
+          <Icon name="image" size={20} /><div><strong>{t('还没有这个比例的成图')}</strong><p>{t(variant.prompt.trim() ? '提示词已就绪，可以生成封面图。' : '生成或粘贴提示词后，即可出图。')}</p></div>
+        </div>}
+        {earlierCovers.length > 0 ? <details className="md-cover-history"><summary>{t('历史成图')} · {earlierCovers.length}</summary><div className="md-cover-generated">{earlierCovers.map(asset => renderCover(asset))}</div></details> : null}
+        <div className="md-cover-prompt-output">
+          <Field label="封面提示词"><textarea rows={4} value={variant.prompt} maxLength={50000} placeholder={t('使用 Skill 生成，或粘贴这个比例的完整提示词')} onChange={e => patchVariant({ prompt: e.target.value })} /></Field>
+          <div className="md-cover-output-actions">
+            <button type="button" className="md-btn is-primary" disabled={!imageReady || !variant.prompt.trim()} onClick={generateImage}>{t(usesImageApi ? '用图片 API 生成封面' : '生成封面图')}</button>
+            <button type="button" className="md-btn is-small" disabled={!variant.prompt} onClick={() => copy(variant.prompt)}>{t('复制提示词')}</button>
+            <button type="button" className="md-btn is-small" disabled={!variant.prompt} onClick={() => downloadText(variant.prompt, `${design.title || item.title}-${ratio.replace(':', 'x')}.txt`)}>{t('导出提示词')}</button>
+          </div>
+          {usesImageApi && imageReady ? <p className="md-cover-preview-note">{t('使用 API 设置中的模型：{model}', { model: imageSettings.model })}</p> : null}
+          {!imageReady ? <p className="md-cover-preview-note">{t('请先在 API 设置中配置生图来源。')} <button type="button" className="md-inline-link" onClick={() => setDesk({ settingsOpen: true })}>{t('设置')}</button></p> : null}
+          {imageError ? <p className="md-cover-prompt-error" role="alert">{imageError}</p> : null}
+        </div>
+      </section>
+      <section className="md-work-panel md-cover-simple-brief" aria-labelledby="md-cover-brief-heading">
+        <div className="md-work-panel-title"><h3 id="md-cover-brief-heading">{t('封面设置')}</h3></div>
+        <Field label="封面文字"><input value={design.title} placeholder={t('例如：200+自拍动作素材上新')} onChange={e => patch({ title: e.target.value })} /></Field>
+        <div className="md-cover-title-tools"><button type="button" onClick={() => patch({ title: item.production?.title || item.title })}>{t('使用当前内容标题')}</button><button type="button" disabled={!model} onClick={generateTitles}>{t('帮我想标题')}</button></div>
+        {titles.map(title => <button type="button" className="md-btn md-cover-title-option" key={title} onClick={() => patch({ title })}>{title}</button>)}
+        <Field label="补充要求（选填）"><textarea rows={2} value={design.requirements} placeholder={t('例如：文字放中间，不加真人，贴纸拼贴风。不填就交给 Skill 设计。')} onChange={e => patch({ requirements: e.target.value })} /></Field>
+        <div className="md-cover-references">
+          <div className="md-cover-ref-header"><div><span>{t('参考图片')}</span>{selectedRefs.length ? <small>{t('已选 {count} 张', { count: selectedRefs.length })}</small> : null}</div><button type="button" className="md-btn is-small" onClick={() => fileInput.current?.click()}><Icon name="plus" size={13} />{t(importing ? '正在导入…' : '上传图片')}</button></div>
+          {referenceImages.length ? <div className="md-cover-reference-strip" role="group" aria-label={t('参考图片')}>{referenceImages.map(asset => <label key={asset.id} title={asset.name}><input type="checkbox" aria-label={asset.name} checked={selectedRefs.includes(asset.id)} onChange={e => {
+            if (e.target.checked) patch({ materialIds: [...design.materialIds, asset.id] })
+            else patch({ materialIds: design.materialIds.filter(id => id !== asset.id), personIds: design.personIds.filter(id => id !== asset.id) })
+          }} /><img src={asset.src} alt="" loading="lazy" /></label>)}</div> : <p className="md-cover-ref-hint">{t('选填，支持截图或素材图')}</p>}
+        </div>
+        <details className="md-cover-options"><summary>{t('更多设置（选填）')}</summary>
+          <Field label="封面风格"><select value={design.style} onChange={e => patch({ style: e.target.value })}>{COVER_STYLES.map(style => <option key={style} value={style}>{t(style)}</option>)}</select></Field>
+          <Field label="标题用色"><input value={design.colors} placeholder={t('留空，交给 Skill 搭配')} onChange={e => patch({ colors: e.target.value })} /></Field>
+          <Field label="生成比例"><div className="md-cover-ratios">{COVER_RATIOS.map(r => <label key={r}><input type="checkbox" checked={design.ratios.includes(r)} onChange={e => patch({ ratios: e.target.checked ? [...design.ratios, r] : design.ratios.filter(x => x !== r) })} />{r}</label>)}</div></Field>
+          <details><summary>{t('指定人物参考')}</summary>{selectImages('personIds')}</details>
+          <details><summary>{t('参考过往封面配色')}</summary>{selectImages('colorIds')}</details>
+        </details>
+        <footer className="md-cover-simple-submit">
+          {model ? <><button type="button" className="md-btn is-primary" disabled={!design.title.trim() || !design.ratios.length} onClick={generatePrompts}><Icon name="image" size={15} />{t(busy === 'prompts' ? '正在生成封面提示词…' : '生成封面提示词')}</button><button type="button" className="md-btn" disabled={!design.title.trim()} onClick={() => copy(task)}>{t('复制到 Skill 对话')}</button></> : <button type="button" className="md-btn is-primary" disabled={!design.title.trim()} onClick={() => copy(task)}><Icon name="copy" size={15} />{t('复制到 Skill 对话')}</button>}
+          <span>{design.ratios.join(' · ')}</span>
+        </footer>
+        {promptError ? <p className="md-cover-prompt-error" role="alert">{promptError}</p> : null}
+        {!model ? <p className="md-cover-preview-note">{t('这里暂未连接模型。复制后，粘贴到你平时的 Skill 对话，并附上选中的参考图即可。')}</p> : null}
+      </section>
+    </div>
     <section className="md-work-panel md-illustrations">
-      <div className="md-work-panel-title"><h3>{t('正文配图')}</h3><button type="button" className="md-btn is-small" disabled={illustrations.length >= 50} onClick={() => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: [...(d.coverDesign.illustrations || []), { id: crypto.randomUUID(), title: `配图 ${(d.coverDesign.illustrations || []).length + 1}`, requirements: '', prompt: '', ratio: '3:4', imageIds: [] }] } }))}><Icon name="plus" size={13} />{t('添加配图')}</button></div>
+      <div className="md-work-panel-title"><div className="md-cover-illustration-heading"><h3>{t('正文配图')}</h3><span>{illustrations.length} {t('张配图')}</span></div><button type="button" className="md-btn is-small" disabled={illustrations.length >= 50} onClick={() => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: [...(d.coverDesign.illustrations || []), { id: crypto.randomUUID(), title: `配图 ${(d.coverDesign.illustrations || []).length + 1}`, requirements: '', prompt: '', ratio: '3:4', imageIds: [] }] } }))}><Icon name="plus" size={13} />{t('添加配图')}</button></div>
       {!illustrations.length ? <p className="md-cover-preview-note">{t('添加讲解图、步骤图或组合拼图，和封面一起交给 Skill 设计。')}</p> : null}
       {illustrations.map(row => <details key={row.id} className="md-illustration" open><summary>{row.title || t('未命名配图')} · {row.ratio}</summary>
         <div className="md-illustration-fields"><Field label="配图名称"><input value={row.title} maxLength={2000} onChange={e => patchIllustration(row.id, { title: e.target.value })} /></Field><Field label="比例"><select value={row.ratio} onChange={e => patchIllustration(row.id, { ratio: e.target.value })}>{COVER_RATIOS.map(r => <option key={r}>{r}</option>)}</select></Field></div>
         <Field label="画面要求"><textarea rows={2} value={row.requirements} maxLength={20000} placeholder={t('例如：将三种角色对比组合为一张配图；用于正文第二段，保持封面配色')} onChange={e => patchIllustration(row.id, { requirements: e.target.value })} /></Field>
         <Field label="配图提示词"><textarea rows={5} value={row.prompt} maxLength={50000} placeholder={t('粘贴这张配图的完整提示词，自动保存')} onChange={e => patchIllustration(row.id, { prompt: e.target.value })} /></Field>
         <details className="md-illustration-results"><summary>{t('关联成图')} · {row.imageIds.length}</summary><div className="md-cover-reference-grid">{images.map(asset => <label key={asset.id}><input type="checkbox" checked={row.imageIds.includes(asset.id)} onChange={e => patchIllustration(row.id, { imageIds: e.target.checked ? [...row.imageIds, asset.id] : row.imageIds.filter(id => id !== asset.id) })} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}</div><button type="button" className="md-btn is-small" onClick={() => fileInput.current?.click()}>{t('上传成图')}</button></details>
-        <div className="md-work-actions"><button type="button" className="md-btn is-small" onClick={() => copy(`${task.replace('生成提示词后，使用 ImageGen 按选定比例生成封面。', '')}\n\n只制作以下正文配图，不生成封面：\n${illustrationTask(row)}\n稿件正文：\n${item.production?.article || item.body || ''}`)}>{t('复制配图任务')}</button><button type="button" className="md-btn is-small" disabled={!row.prompt.trim()} onClick={() => copy(row.prompt)}>{t('复制提示词')}</button><button type="button" className="md-btn is-small" onClick={() => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: (d.coverDesign.illustrations || []).filter(entry => entry.id !== row.id) } }))}>{t('移除配图')}</button></div>
+        <div className="md-work-actions"><button type="button" className="md-btn is-small" onClick={() => copy(`${designBrief}\n\n只为以下正文配图编写提示词，不编写封面提示词。${promptOnly}\n\n${illustrationTask(row)}\n稿件正文：\n${item.production?.article || item.body || ''}`)}>{t('复制配图任务')}</button><button type="button" className="md-btn is-small" disabled={!row.prompt.trim()} onClick={() => copy(row.prompt)}>{t('复制提示词')}</button><button type="button" className="md-btn is-small" onClick={() => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: (d.coverDesign.illustrations || []).filter(entry => entry.id !== row.id) } }))}>{t('移除配图')}</button></div>
       </details>)}
     </section>
     {draft.coverPromptText != null ? <details className="md-work-panel md-cover-legacy"><summary>{t('原有封面提示词')}</summary><Field label="封面提示词"><textarea rows={6} value={draft.coverPromptText} onChange={e => update({ coverPromptText: e.target.value })} /></Field><button type="button" className="md-btn is-small" onClick={() => patchVariant({ prompt: draft.coverPromptText })}>{t('导入当前比例版本')}</button></details> : null}
     </fieldset>
-    {busy ? <p role="status" className="md-cover-busy">{t(busy === 'prompts' ? '正在按 Skill 设计提示词…' : busy === 'titles' ? '正在推荐标题…' : '正在生成封面图…')}</p> : null}
   </div>
 }
 

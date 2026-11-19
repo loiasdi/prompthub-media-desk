@@ -151,14 +151,17 @@ export function FormDialog() {
 
 export function Toast() {
   const toast = useDesk(s => s.toast)
-  if (!toast) return null
-  return (
-    <div key={toast.key} className={`md-toast ${toast.error ? 'is-error' : ''}`} role={toast.error ? 'alert' : 'status'}>
+  const progress = useDesk(s => s.progressToast)
+  return <>
+    {progress ? <div className="md-toast is-progress" role="status">
+      <Icon name="refresh" size={14} /><span>{progress.text}</span>
+    </div> : null}
+    {toast ? <div key={toast.key} className={`md-toast ${toast.error ? 'is-error' : ''}`} role={toast.error ? 'alert' : 'status'}>
       {toast.undo ? <Icon name="check" size={14} /> : null}
       <span>{toast.text}</span>
       {toast.undo ? <button type="button" onClick={undo}>{t('撤销')}</button> : null}
-    </div>
-  )
+    </div> : null}
+  </>
 }
 
 export function Empty({ title, hint, action }) {

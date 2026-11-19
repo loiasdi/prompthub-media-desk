@@ -147,7 +147,7 @@ export class ContentAssets {
     }, { undoable: false })
   }
 
-  async import(id, stream, { name, folder = '', relativePath = '', revision } = {}) {
+  async import(id, stream, { name, folder = '', relativePath = '', revision, coverResult = false } = {}) {
     const current = await this.read(id)
     expectRevision(current, revision)
     await this.cleanPending()
@@ -183,6 +183,7 @@ export class ContentAssets {
       const metadata = await this.inspect(file, type, type === 'video' ? posterFile : null)
       const src = `media-desk/files/${id}/${filename}`
       const asset = { id: fileId(src), src, name: cleanName, type, role: 'source', folder: '', origin: 'imported', bytes, sha256: hash.digest('hex'), importedAt: new Date().toISOString(), relativePath: String(relativePath).replaceAll('\\', '/').split('/').filter(p => p && p !== '.' && p !== '..').join('/').slice(0, 1000), ...metadata }
+      if (coverResult === true && type === 'image') asset.coverResult = true
       if (asset.hasPoster) asset.poster = `media-desk/files/${id}/${posterName}`
       delete asset.hasPoster
       return await this.store.mutate('导入内容素材', state => {

@@ -6,6 +6,7 @@ import { callModel, extractJson } from './ai.js'
 import { COVER_RATIOS } from './cover-design-schema.js'
 import { ContentAssets } from './content-assets.js'
 import { fail } from './workspace-schema.js'
+import { tr } from './i18n.js'
 import { imageBuffer, generateCoverHttpImage } from './cover-image-http.js'
 import { generateToolImage } from './image-tool.js'
 
@@ -35,6 +36,24 @@ export async function coverReferences(store, ws) {
   return result
 }
 
+const compact = value => value.replace(/\s+/g, '')
+
+function checkCoverPrompt(value, title, ratio) {
+  if (typeof value !== 'string' || !value.trim()) return { reason: '缺少提示词' }
+  const prompt = value.trim()
+  const exactTitle = prompt.includes(title)
+  if (!exactTitle && !compact(prompt).includes(compact(title))) return { reason: '封面标题未原样保留' }
+  // 标题里的方括号或「待定」是用户文字，不当成模板占位符。
+  const withoutTitle = (exactTitle ? prompt.replaceAll(title, '') : compact(prompt).replaceAll(compact(title), ''))
+  if (/由模型决定|待定|\[[^\]\n]+\]/.test(withoutTitle)) return { reason: '提示词仍有模板占位符' }
+  // JSON 的键标识版本，不要求正文重复同样的 ASCII 画幅字样；存档时补齐画幅与原始标题。
+  // 如果正文明确写成了另一个支持的画幅，不用加前缀来掩盖冲突。
+  const ratios = new Set(withoutTitle.match(/(?<!\d)(?:3\s*[:：]\s*4|4\s*[:：]\s*3|16\s*[:：]\s*9)(?!\d)/g)?.map(value => compact(value).replace('：', ':')) || [])
+  if (ratios.size && !ratios.has(ratio)) return { reason: '提示词画幅不匹配' }
+  const normalized = [ratios.has(ratio) && withoutTitle.includes(ratio) ? '' : `封面画幅：${ratio}`, exactTitle ? '' : `完整封面文字：${title}`, prompt].filter(Boolean).join('\n')
+  return normalized.length > 50000 ? { reason: '提示词过长' } : { prompt: normalized }
+}
+
 export async function coverPromptAction(ctx, store, desk, body) {
   const assets = desk.assets ??= new ContentAssets(store)
   const ws = await assets.read(body.id)
@@ -56,19 +75,46 @@ export async function coverPromptAction(ctx, store, desk, body) {
     if (!Array.isArray(titles) || titles.length !== 3 || titles.some(title => typeof title !== 'string' || !title.trim() || title.length > 100)) throw fail('模型未返回三个有效标题，请重试', 502)
     return { titles }
   }
-  const { text } = await callModel(ctx, {
-    system: `${skill}\n\n当前为工作台设计任务，用户已提供参考图、标题与补充要求。未填的风格与用色由你具体决定；只有参考图中已出现的人物才可使用，不额外添加人物。用户明确的本次要求高于模板默认项，包括不添加真人、文字居中和指定多个比例。不要再次提问。为每个明确选中的比例重新设计构图。仅输出 JSON：{"variants":{"3:4":"完整提示词"}}，键仅包含用户选择的比例。标题必须原样出现。输出前执行 Skill 的内部复核；不要在最终提示词中留占位符。`,
-    user: JSON.stringify({ title: d.title, style: d.style, colors: d.colors || '无固定用色', requirements: d.requirements, ratios, references: refs.map((r, i) => ({ number: i + 1, name: r.name, role: r.role })), description: item.production?.description || '', topics: item.production?.topics || '', article: (item.production?.article || item.body || '').slice(0, 20000) }),
-    images, maxTokens: 10000, signal: AbortSignal.timeout(240000),
-  })
-  const parsed = extractJson(text)
+  const title = d.title.trim()
+  const brief = { title, style: d.style, colors: d.colors || '无固定用色', requirements: d.requirements, references: refs.map((r, i) => ({ number: i + 1, name: r.name, role: r.role })), description: item.production?.description || '', topics: item.production?.topics || '', article: (item.production?.article || item.body || '').slice(0, 20000) }
+  const signal = AbortSignal.timeout(240000)
   const variants = {}
-  for (const ratio of ratios) {
-    const prompt = parsed.variants?.[ratio]
-    if (typeof prompt !== 'string' || prompt.length > 50000 || !prompt.includes(d.title) || !prompt.includes(ratio) || /由模型决定|待定|\[[^\]\n]+\]/.test(prompt)) throw fail('模型未返回完整封面提示词，请重试', 502)
-    variants[ratio] = prompt
+  let pending = ratios
+  let problems = []
+  // 一版不合格只补做这一版，模型服务本身报错则原样返回，不盲目重试。
+  for (let attempt = 0; attempt < 2 && pending.length; attempt++) {
+    const schema = JSON.stringify({ variants: Object.fromEntries(pending.map(ratio => [ratio, '完整提示词'])) })
+    const contract = `本次是工作台的非交互式「生成封面提示词」步骤。只写提示词，不生图、不调用工具、不追问，不输出 Markdown 或说明。即使补充要求里提到生图工具或接口，实际出图也由工作台在下一步处理。封面标题不可改写或翻译。只返回合法 JSON，包含下列全部且仅这些画幅键，值均为完整的提示词字符串：${schema}`
+    let text
+    try {
+      ({ text } = await callModel(ctx, {
+        system: `${contract}\n\n${skill}\n\n${contract}\n五步信息已由表单收集。未填的风格与用色由你具体决定；只有参考图中已出现的人物才可使用，不额外添加人物。用户明确的本次要求高于模板默认项（但不改变当前步骤和输出格式）。为每个选中比例独立构图，使用指定画幅，保留完整标题的文字和标点。输出前执行 Skill 的内部复核，不留占位符。`,
+        user: JSON.stringify({ ...brief, ratios: pending, ...(attempt ? { repair: problems } : {}) }),
+        images, maxTokens: 1500 + pending.length * 1500, signal,
+      }))
+    } catch (err) {
+      if (signal.aborted) throw fail(tr('生成封面提示词超时，请先尝试只选一个比例'), 504)
+      throw err
+    }
+    let parsed
+    try { parsed = extractJson(text) }
+    catch {
+      problems = pending.map(ratio => ({ ratio, reason: '模型没有返回有效 JSON' }))
+      continue
+    }
+    problems = []
+    for (const ratio of pending) {
+      const result = checkCoverPrompt(parsed?.variants?.[ratio], title, ratio)
+      if (result.reason) problems.push({ ratio, reason: result.reason })
+      else variants[ratio] = result.prompt
+    }
+    pending = problems.map(({ ratio }) => ratio)
   }
-  return { variants }
+  if (pending.length) {
+    const details = problems.map(({ ratio, reason }) => `${ratio} · ${tr(reason)}`).join(' / ')
+    throw fail(tr('模型未返回完整封面提示词（{details}）。可只选一个比例重试，或复制到 Skill 对话。', { details }), 502)
+  }
+  return { variants: Object.fromEntries(ratios.map(ratio => [ratio, variants[ratio]])) }
 }
 
 export async function coverImageAction(ctx, store, desk, body) {
@@ -83,9 +129,9 @@ export async function coverImageAction(ctx, store, desk, body) {
   const settings = await desk.settings.read()
   let result
   if (settings.image.source === 'tool') {
-    if (refs.length) throw fail('当前 DSH 生图接入尚不支持参考图，请使用支持图片编辑的 HTTP 接口，或复制任务到 ImageGen 对话中生成')
+    if (refs.length) throw fail('当前 DSH 生图接入尚不支持参考图，请在 API 设置选择支持图片编辑的图片 API')
     result = await generateToolImage(ctx, { ...settings.image, toolSize: 'auto' }, prompt)
   } else result = await generateCoverHttpImage(settings.image, prompt, refs, body.ratio)
   const checked = imageBuffer(result.buffer)
-  return assets.import(body.id, Readable.from([checked.buffer]), { name: `cover-${body.ratio.replace(':', 'x')}-${Date.now()}${checked.ext}`, revision: body.revision })
+  return assets.import(body.id, Readable.from([checked.buffer]), { name: `cover-${body.ratio.replace(':', 'x')}-${Date.now()}${checked.ext}`, revision: body.revision, coverResult: true })
 }
