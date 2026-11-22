@@ -1,4 +1,5 @@
 export const WORKSPACE = {
+  '已有内容': 'Has content',
   '普通设置': 'General',
   'API 设置': 'API settings',
   '设置分类': 'Settings categories',

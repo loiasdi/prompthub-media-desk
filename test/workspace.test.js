@@ -1,10 +1,65 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { setLanguagePreference } from '../client/i18n.js'
-import { contentAssets, createWorkspaceDraft, patchWorkspaceDraft, promptDocument, resolveWorkspaceDraft, workspaceAssets } from '../client/workspace.js'
+import { contentAssets, createWorkspaceDraft, patchWorkspaceDraft, promptDocument, resolveWorkspaceDraft, workspaceAssets, workspaceContentPresence } from '../client/workspace.js'
+import { emptyWorkspace, sanitizeWorkspace } from '../src/workspace-schema.js'
+import { applyOps } from '../src/ops.js'
+import { COVER_STYLES } from '../src/cover-design-schema.js'
 
 const idea = () => ({ id: 'content-1', title: '原始灵感', body: '原始笔记', platform: '小红书' })
 const produced = () => ({ ...idea(), production: { title: '正式标题', article: '正式正文', cover: { src: 'media-desk/files/cover-a.png' }, images: [{ src: 'media-desk/files/figure-a.png', caption: '场景 A' }] } })
+
+test('导航绿点：默认字段不算内容，修改内容或稿件标题不误亮封面', () => {
+  const original = { id: 'presence', title: '原始标题' }
+  const stored = createWorkspaceDraft(original)
+  const presence = item => workspaceContentPresence(item, resolveWorkspaceDraft(item, stored), [])
+  assert.deepEqual(presence(original), { idea: true, outline: false, article: false, prompts: false, cover: false, assets: false, publish: false })
+  assert.equal(presence({ ...original, title: '修改后的选题标题' }).cover, false)
+  assert.equal(presence({ ...original, production: { title: '修改后的稿件标题', article: '' } }).cover, false)
+  // 旧工作区没有标题编辑记录，不能把保留的旧默认标题认作手动输入。
+  delete stored.coverDesign.titleEdited
+  assert.equal(presence({ ...original, title: '另一个标题' }).cover, false)
+})
+
+test('导航绿点：正文为空时，独立填写稿件标题、描述或话题也算内容', () => {
+  for (const patch of [{ title: '单独编辑的稿件标题' }, { description: '单独填写的描述' }, { topics: '#单独话题' }]) {
+    const item = { id: 'metadata-presence', title: '选题', body: '' }
+    assert.deepEqual(applyOps({ items: [item] }, [{ op: 'update_production', id: item.id, ...patch }]).errors, [])
+    const presence = () => workspaceContentPresence(item, resolveWorkspaceDraft(item, createWorkspaceDraft(item)), [])
+    assert.equal(item.production.article, '')
+    assert.equal(presence().article, true)
+    applyOps({ items: [item] }, [{ op: 'update_production', id: item.id, title: item.title, description: '  ', topics: '\n' }])
+    assert.equal(presence().article, false)
+  }
+})
+
+test('导航绿点：手改封面标题经过保存、改稿和清空后保留正确状态', () => {
+  const item = { id: 'cover-presence', title: '选题' }
+  const current = emptyWorkspace(item)
+  const initial = createWorkspaceDraft(item)
+  const edited = patchWorkspaceDraft(item, initial, { coverDesign: { ...initial.coverDesign, title: '独立封面标题' } })
+  const saved = sanitizeWorkspace(item, edited, current)
+  const renamed = { ...item, production: { title: '新稿件标题' } }
+  const reopened = resolveWorkspaceDraft(renamed, { ...createWorkspaceDraft(renamed), ...saved })
+  assert.equal(workspaceContentPresence(renamed, reopened, []).cover, true)
+  const cleared = patchWorkspaceDraft(renamed, reopened, { coverDesign: { ...reopened.coverDesign, title: '  ' } })
+  const clearedSaved = sanitizeWorkspace(renamed, cleared, saved)
+  assert.equal(workspaceContentPresence(renamed, resolveWorkspaceDraft(renamed, clearedSaved), []).cover, false)
+})
+
+test('导航绿点：选择封面风格或调整比例算内容，恢复默认后取消标记', () => {
+  const item = { id: 'style-presence', title: '选题' }
+  let stored = createWorkspaceDraft(item)
+  const presence = () => workspaceContentPresence(item, resolveWorkspaceDraft(item, stored), []).cover
+  stored = patchWorkspaceDraft(item, stored, { coverDesign: { ...stored.coverDesign, style: '教程清单风' } })
+  assert.equal(presence(), true)
+  stored = patchWorkspaceDraft(item, stored, { coverDesign: { ...stored.coverDesign, style: COVER_STYLES[0] } })
+  assert.equal(presence(), false)
+  stored = patchWorkspaceDraft(item, stored, { coverDesign: { ...stored.coverDesign, ratios: ['16:9'] } })
+  assert.equal(presence(), true)
+  stored = patchWorkspaceDraft(item, stored, { coverDesign: { ...stored.coverDesign, ratios: [...createWorkspaceDraft(item).coverDesign.ratios].reverse() } })
+  assert.equal(presence(), false)
+})
 
 test('发布草稿：先显示卡片再成稿，未编辑文案持续跟随稿件更新', () => {
   const stored = createWorkspaceDraft(idea())

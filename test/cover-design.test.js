@@ -9,6 +9,7 @@ import { ContentAssets } from '../src/content-assets.js'
 import { coverPromptAction, coverImageAction } from '../src/cover-design.js'
 import { generateCoverHttpImage } from '../src/cover-image-http.js'
 import { sanitizeCoverDesign, emptyCoverDesign } from '../src/cover-design-schema.js'
+import { createWorkspaceDraft, patchWorkspaceDraft, resolveWorkspaceDraft, workspaceContentPresence } from '../client/workspace.js'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
 async function fixture(run) {
@@ -213,6 +214,26 @@ test('封面文字默认使用稿件标题，兼容已有空值并保留自定�
   assert.equal((await assets.read('piece')).coverDesign.title, '自定义封面')
   await store.mutate('', state => { state.items[0].workspace.coverDesign.title = '' }, { undoable: false })
   assert.equal((await assets.read('piece')).coverDesign.title, '正式标题')
+}))
+
+test('封面标题编辑标记落库后重启可恢复，稿件改名不误改标记，恢复默认可取消', () => fixture(async ({ store, assets }) => {
+  const item = (await store.read()).items[0]
+  const current = await assets.read(item.id)
+  const draft = { ...createWorkspaceDraft(item), ...current }
+  const edited = patchWorkspaceDraft(item, draft, { coverDesign: { ...draft.coverDesign, title: '独立封面标题' } })
+  await assets.save(item.id, current.revision, edited)
+  await store.mutate('', state => { state.items[0].production = { title: '独立封面标题' } }, { undoable: false })
+  const restartedStore = new Store(store.root)
+  const restartedAssets = new ContentAssets(restartedStore)
+  const renamed = (await restartedStore.read()).items[0]
+  const reopened = await restartedAssets.read(item.id)
+  assert.equal(reopened.coverDesign.titleEdited, true)
+  assert.equal(workspaceContentPresence(renamed, resolveWorkspaceDraft(renamed, reopened), []).cover, true)
+  const reset = patchWorkspaceDraft(renamed, reopened, { coverDesign: { ...reopened.coverDesign, title: renamed.production.title, titleEdited: false } })
+  await restartedAssets.save(item.id, reopened.revision, reset)
+  const afterReset = await new ContentAssets(new Store(store.root)).read(item.id)
+  assert.equal(afterReset.coverDesign.titleEdited, false)
+  assert.equal(workspaceContentPresence(renamed, resolveWorkspaceDraft(renamed, afterReset), []).cover, false)
 }))
 
 

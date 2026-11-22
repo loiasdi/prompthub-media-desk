@@ -1,4 +1,4 @@
-import { emptyCoverDesign, sanitizeCoverDesign } from '../src/cover-design-schema.js'
+import { COVER_RATIOS, COVER_STYLES, emptyCoverDesign, sanitizeCoverDesign } from '../src/cover-design-schema.js'
 // 内容制作草稿与服务端工作区的同步，以及页面所需的素材投影。
 import React from 'react'
 import { lang, t } from './i18n.js'
@@ -36,6 +36,32 @@ export function workspaceAssets(item, draft) {
   return [...new Map([...sourceAssets(item), ...draft.assets].map(a => [a.id, a])).values()].filter(a => !hidden.has(a.id)).map(a => ({ ...localizeAsset(a), ...draft.edits[a.id] }))
 }
 
+// 只统计页面里的实际内容，自动带入的标题和发布文案不算已填写。
+export function workspaceContentPresence(item, draft, assets) {
+  const hasText = value => typeof value === 'string' && Boolean(value.trim())
+  const design = draft.coverDesign
+  const hasImages = row => row.imageIds?.some(id => assets.some(asset => asset.id === id))
+  return {
+    idea: [item.title, item.body, item.url, item.media?.src, draft.ideaText].some(hasText) || Boolean(item.mediaItems?.length),
+    outline: hasText(draft.outlineText),
+    article: [item.production?.article ?? item.body, item.production?.description, item.production?.topics].some(hasText) ||
+      (hasText(item.production?.title) && item.production.title !== item.title),
+    prompts: hasText(draft.promptText) || (draft.promptText == null && draft.segments.some(row => [row.prompt, row.voice, row.image].some(hasText))),
+    cover: hasText(draft.coverPromptText) ||
+      [design.requirements, design.colors].some(hasText) ||
+      (design.titleEdited === true && hasText(design.title)) ||
+      design.style !== COVER_STYLES[0] ||
+      design.ratios.length !== COVER_RATIOS.length || COVER_RATIOS.some(ratio => !design.ratios.includes(ratio)) ||
+      [design.personIds, design.materialIds, design.colorIds].some(ids => ids.length > 0) ||
+      Object.values(design.variants).some(row => hasText(row.prompt) || hasImages(row)) ||
+      design.illustrations.length > 0 || assets.some(asset => ['cover', 'figure'].includes(asset.role)),
+    assets: assets.length > 0,
+    publish: item.status === 'published' || hasText(item.publishedAt) || hasText(item.scheduledAt) ||
+      Object.entries(draft.publishEdited).some(([field, edited]) => edited && hasText(draft.publish[field])) ||
+      [draft.selectedVideo, draft.selectedCover, draft.publish.when].some(hasText) || draft.imageIds.length > 0,
+  }
+}
+
 // 从最新内容投影默认文案，不在 getSnapshot 中反复写回旧 item 的状态。
 export function resolveWorkspaceDraft(item, stored, assets = workspaceAssets(item, stored)) {
   const source = publishSource(item)
@@ -63,6 +89,10 @@ export function patchWorkspaceDraft(item, stored, patch) {
   const changes = typeof patch === 'function' ? patch(before) : patch
   const next = { ...before, ...changes, publish: { ...before.publish, ...changes.publish }, publishEdited: { ...before.publishEdited, ...changes.publishEdited }, publishSource: { ...before.publishSource } }
   const source = publishSource(item)
+  if (typeof changes.coverDesign?.title === 'string' && changes.coverDesign.title !== before.coverDesign.title) {
+    // 记录真实输入；改稿导致默认标题变化时不重新猜测封面标题的来源。
+    next.coverDesign = { ...next.coverDesign, titleEdited: Boolean(changes.coverDesign.title.trim()) && changes.coverDesign.title !== source.title }
+  }
   for (const field of PUBLISH_SOURCE_FIELDS) {
     if (changes.publish && Object.hasOwn(changes.publish, field) && changes.publish[field] !== before.publish[field]) {
       next.publishEdited[field] = changes.publishEdited?.[field] ?? (changes.publish[field] !== source[field])

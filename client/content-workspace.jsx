@@ -10,7 +10,7 @@ import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, startProgress
 import { t, useLang } from './i18n.js'
 import { Dialog, Icon, IconButton, Segmented } from './ui.jsx'
 import { PLATFORMS, STATUSES, STATUS_LABEL, displayItem } from './util.js'
-import { ASSET_ROLE_NAMES, cancelWorkspaceImport, downloadText, importWorkspaceFiles, recycleWorkspaceAsset, formatBytes, flushWorkspace, promptDocument, runCoverAction, useWorkspace, workspaceId } from './workspace.js'
+import { ASSET_ROLE_NAMES, cancelWorkspaceImport, downloadText, importWorkspaceFiles, recycleWorkspaceAsset, formatBytes, flushWorkspace, promptDocument, runCoverAction, useWorkspace, workspaceContentPresence, workspaceId } from './workspace.js'
 
 import { copyVideoPromptSection, indexVideoPrompt, MAX_PROMPT_TEXT } from '../src/video-prompt-document.js'
 
@@ -45,6 +45,7 @@ export function ContentWorkspace({ item, children }) {
   const assistantOpen = useDesk(s => s.studioDock) || item.production?.status === 'running'
   const { draft, update, assets, syncPublish, persistence, retrySave, reloadWorkspace } = useWorkspace(item)
   const title = displayItem(item).title
+  const contentPresence = workspaceContentPresence(item, draft, assets)
   const tabs = [{ id: 'idea', name: '灵感', icon: 'pen' }, { id: 'outline', name: '大纲', icon: 'pen' }, { id: 'article', name: '稿件', icon: 'pen' }, { id: 'prompts', name: '视频提示词', icon: 'film' }, { id: 'cover', name: '配图与封面', icon: 'image' }, { id: 'assets', name: '素材', icon: 'folder', count: assets.length }, { id: 'publish', name: '发布', icon: 'upRight' }]
   const statusIndex = STATUSES.indexOf(item.status || 'idea')
   const nextStatus = STATUSES[statusIndex + 1]
@@ -84,14 +85,14 @@ export function ContentWorkspace({ item, children }) {
             <IconButton icon="trash" label={t('删除这条灵感')} onClick={async () => { await dispatchOps([{ op: 'delete_item', id: item.id }], { label: t('删除《{title}》', { title: item.title.slice(0, 10) }) }); closeItem() }} />
           </div><button type="button" className="md-btn is-small" onClick={() => setFeishuOpen(true)}>同步到飞书</button><button type="button" className={`md-btn is-small ${assistantOpen ? 'is-active' : ''}`} aria-expanded={assistantOpen} aria-controls="studio-assistant" onClick={() => setDesk({ studioDock: !assistantOpen })}><Icon name="chat" size={14} />{t('创作助手')}</button><button type="button" className="md-btn is-primary is-small" onClick={() => onTab('publish')}><Icon name="upRight" size={14} />{t('准备发布')}</button></div>
       </header>
-      <aside className="md-workspace-nav"><div role="tablist" aria-orientation="vertical" aria-label={t('内容档案')}>{tabs.map(entry => <button key={entry.id} id={`workspace-tab-${entry.id}`} type="button" role="tab" aria-label={t(entry.name)} title={t(entry.name)} aria-selected={tab === entry.id} aria-controls={`workspace-panel-${entry.id}`} tabIndex={tab === entry.id ? 0 : -1} className={tab === entry.id ? 'is-on' : ''} onClick={() => onTab(entry.id)} onKeyDown={event => {
+      <aside className="md-workspace-nav"><div role="tablist" aria-orientation="vertical" aria-label={t('内容档案')}>{tabs.map(entry => <button key={entry.id} id={`workspace-tab-${entry.id}`} type="button" role="tab" aria-label={contentPresence[entry.id] ? `${t(entry.name)} · ${t('已有内容')}` : t(entry.name)} title={contentPresence[entry.id] ? `${t(entry.name)} · ${t('已有内容')}` : t(entry.name)} aria-selected={tab === entry.id} aria-controls={`workspace-panel-${entry.id}`} tabIndex={tab === entry.id ? 0 : -1} className={tab === entry.id ? 'is-on' : ''} onClick={() => onTab(entry.id)} onKeyDown={event => {
         if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
         event.preventDefault()
         const index = tabs.findIndex(row => row.id === entry.id)
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length
         onTab(tabs[next].id)
         document.getElementById(`workspace-tab-${tabs[next].id}`)?.focus()
-      }}><Icon name={entry.icon} size={15} />{t(entry.name)}{entry.count !== undefined ? <span>{entry.count}</span> : null}</button>)}</div><span className="md-workspace-preview" role="status">{persistence.status === 'error' ? <><span>{t('保存失败')}：{persistence.error}</span><button type="button" onClick={() => persistence.conflict ? setDesk({ dialog: { title: t('重新加载工作区'), fields: [{ name: 'notice', type: 'hidden', label: t('这会丢弃当前窗口未保存的修改，可先导出草稿') }], onSubmit: () => reloadWorkspace().catch(err => toast(err.message, { error: true })) } }) : retrySave().catch(err => toast(err.message, { error: true }))}>{t(persistence.conflict ? '重新加载' : '重试保存')}</button><button type="button" onClick={() => downloadText(JSON.stringify(draft, null, 2), `${item.title}-draft.json`, 'application/json')}>{t('导出草稿')}</button></> : t(persistence.status === 'saved' ? '已保存' : persistence.status === 'saving' ? '正在保存…' : '有未保存修改')}</span></aside>
+      }}><Icon name={entry.icon} size={15} />{t(entry.name)}{contentPresence[entry.id] ? <i className="md-workspace-content-dot" aria-hidden="true" /> : null}{entry.count !== undefined ? <span>{entry.count}</span> : null}</button>)}</div><span className="md-workspace-preview" role="status">{persistence.status === 'error' ? <><span>{t('保存失败')}：{persistence.error}</span><button type="button" onClick={() => persistence.conflict ? setDesk({ dialog: { title: t('重新加载工作区'), fields: [{ name: 'notice', type: 'hidden', label: t('这会丢弃当前窗口未保存的修改，可先导出草稿') }], onSubmit: () => reloadWorkspace().catch(err => toast(err.message, { error: true })) } }) : retrySave().catch(err => toast(err.message, { error: true }))}>{t(persistence.conflict ? '重新加载' : '重试保存')}</button><button type="button" onClick={() => downloadText(JSON.stringify(draft, null, 2), `${item.title}-draft.json`, 'application/json')}>{t('导出草稿')}</button></> : t(persistence.status === 'saved' ? '已保存' : persistence.status === 'saving' ? '正在保存…' : '有未保存修改')}</span></aside>
       <section className={`md-workspace-panel ${tab === 'article' ? 'is-manuscript' : ''}`} role="tabpanel" id={`workspace-panel-${tab}`} aria-labelledby={`workspace-tab-${tab}`} key={`${item.id}:${tab}`}>
         {tab === 'article' ? children : <>
           {tab === 'idea' || tab === 'outline' ? <PlanningPage item={item} draft={draft} update={update} mode={tab} /> : tab === 'prompts' ? <PromptPage item={item} draft={draft} update={update} assets={assets} /> : tab === 'cover' ? <CoverDesignPage item={item} draft={draft} update={update} assets={assets} /> : tab === 'assets' ? <AssetsPage item={item} draft={draft} update={update} assets={assets} persistence={persistence} /> : <PublishPage key={item.id} item={item} draft={draft} update={update} assets={assets} onTab={onTab} syncPublish={syncPublish} />}
@@ -259,7 +260,7 @@ function CoverDesignPage({ item, draft, update, assets }) {
       <section className="md-work-panel md-cover-simple-brief" aria-labelledby="md-cover-brief-heading">
         <div className="md-work-panel-title"><h3 id="md-cover-brief-heading">{t('封面设置')}</h3></div>
         <Field label="封面文字"><input value={design.title} placeholder={t('例如：200+自拍动作素材上新')} onChange={e => patch({ title: e.target.value })} /></Field>
-        <div className="md-cover-title-tools"><button type="button" onClick={() => patch({ title: item.production?.title || item.title })}>{t('使用当前内容标题')}</button><button type="button" disabled={!model} onClick={generateTitles}>{t('帮我想标题')}</button></div>
+        <div className="md-cover-title-tools"><button type="button" onClick={() => patch({ title: item.production?.title || item.title, titleEdited: false })}>{t('使用当前内容标题')}</button><button type="button" disabled={!model} onClick={generateTitles}>{t('帮我想标题')}</button></div>
         {titles.map(title => <button type="button" className="md-btn md-cover-title-option" key={title} onClick={() => patch({ title })}>{title}</button>)}
         <Field label="补充要求（选填）"><textarea rows={2} value={design.requirements} placeholder={t('例如：文字放中间，不加真人，贴纸拼贴风。不填就交给 Skill 设计。')} onChange={e => patch({ requirements: e.target.value })} /></Field>
         <div className="md-cover-references">
