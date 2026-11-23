@@ -55,7 +55,7 @@ export function MaitianTaskActions({ id, job, request, refresh }) {
   return <div className="md-maitian-task-actions">
     {job.querying ? <p role="status">{t('正在查询麦田结果，原发布状态保持不变。')}</p> : null}
     {job.cancelRequested && job.executionActive ? <p role="status">{t('已请求停止；当前步骤可能继续，请等待执行器退出。')}</p> : null}
-    {candidate ? <div className="md-publish-review">
+    {candidate ? <div className="md-maitian-candidate">
       <strong>{t('麦田查询候选')}</strong><p>{candidate.status} · {job.lastReview.queriedAt}</p>
       {candidate.workId ? <p>{t('平台作品 ID')}：{candidate.workId}</p> : null}
       {candidate.candidateCount !== undefined ? <p>{t('上游返回的候选数量')}：{candidate.candidateCount}</p> : null}

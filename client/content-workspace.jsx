@@ -3,9 +3,10 @@ import { playableVideo, sourceKind, sourceImage } from '../src/inspiration-sourc
 import { FeishuSyncDialog } from './feishu-sync.jsx'
 import { preferredCoverRatio } from './cover.js'
 import { ArticleImagePicker, PublishAccount, PublishChecklist, PublishControls, PublishHistory, usePublishPreparation, usePublishing } from './publish.jsx'
+import { API_PLATFORMS } from './publish-readiness.js'
 import { publishUsesArticleImages, publishUsesCover } from '../src/publish/capabilities.js'
 import { articleImageIds } from '../src/publish/article-images.js'
-import { MaitianExport } from './maitian-publish.jsx'
+import { MaitianBundlePanel, MaitianExportConsole, useMaitianBundle } from './maitian-publish.jsx'
 import { PublishMethod, publishMethod } from './publish-method.jsx'
 import React from 'react'
 import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, startProgressToast, toast, useDesk } from './desk.js'
@@ -381,7 +382,11 @@ function AssetsPage({ item, draft, update, assets, persistence }) {
   </div>
 }
 
-export function PublishPage({ item, draft, update, assets, onTab, syncPublish }) {
+const FORMAT_LABELS = { video: '视频', images: '图文', text: '纯文字', article: '文章' }
+const API_PLATFORM_NAMES = Object.keys(API_PLATFORMS)
+
+export function PublishPage({ item, draft, update, assets, onTab, syncPublish, initialStep = 'prepare' }) {
+  const [step, setStep] = React.useState(initialStep)
   const publish = draft.publish
   const method = publishMethod(publish)
   const apiMode = method === 'api'
@@ -389,30 +394,84 @@ export function PublishPage({ item, draft, update, assets, onTab, syncPublish })
   const publishing = usePublishing(item.id, publish.platform, apiMode)
   const video = assets.find(a => a.id === draft.selectedVideo)
   const cover = assets.find(a => a.id === draft.selectedCover)
-  const articleImages = !browserMode && publishUsesArticleImages(publishing.platform, publish.format)
+  const articleImages = publish.format === 'article' || (!browserMode && publishUsesArticleImages(publishing.platform, publish.format))
   const images = (articleImages ? articleImageIds(publish.description) : draft.imageIds).map(id => assets.find(a => a.id === id)).filter(Boolean)
   const patch = values => update(d => ({ publish: { ...d.publish, ...values } }))
   const flow = usePublishPreparation({ item, publishing, publish, video, cover, images })
-  const useCover = !browserMode && publish.format !== 'text' && (!apiMode || !publishing.platform || publishUsesCover(publishing.platform, publish.format))
-  const previewCover = browserMode ? assets.find(asset => asset.id === publish.browser?.covers?.['3x4']) : useCover ? cover : null
+  const maitianBundle = useMaitianBundle({ item, draft, update, assets, publishing })
+  const useCover = publish.format !== 'text' && (step === 'prepare' || (!browserMode && (!apiMode || !publishing.platform || publishUsesCover(publishing.platform, publish.format))))
+  const browserCoverId = ['3x4', '4x3', '16x9'].map(ratio => publish.browser?.covers?.[ratio]).find(Boolean)
+  const previewCover = browserMode ? (assets.find(asset => asset.id === browserCoverId) || cover) : useCover ? cover : null
   const manualPackage = () => {
     const covers = browserMode ? [...new Set(Object.values(publish.browser?.covers || {}))].map(id => assets.find(asset => asset.id === id)) : useCover ? [cover] : []
     const selected = [...(publish.format === 'video' ? [video] : publish.format === 'images' || articleImages ? images : []), ...covers].filter(Boolean)
     const text = `# ${publish.title}\n\n${publish.description}\n\n${publish.tags}\n\n## ${t('发布素材')}\n\n${selected.map(a => `- ${a.name}`).join('\n')}\n\n${t('发布清单仅包含文案和文件名，请在素材页下载对应文件')}`
     downloadText(text, `${item.title}-publish.md`, 'text/markdown')
   }
+  const basicChecks = [
+    { text: '发布标题', done: Boolean(publish.title?.trim()) },
+    ...(['text', 'article'].includes(publish.format) ? [] : [publish.format === 'video' ? { text: '发布视频', done: Boolean(video) } : { text: '发布图片', done: images.length > 0 }]),
+    ...(publish.format === 'text' ? [] : [{ text: '发布封面', done: Boolean(cover), optional: true }]),
+  ]
+  const basicRequired = basicChecks.filter(row => !row.optional)
+  const basicReady = basicRequired.filter(row => row.done).length
+  const mediaSummary = publish.format === 'video' ? (video?.name || t('未选成片')) : publish.format === 'images' ? t('{n} 张图片', { n: images.length }) : t(FORMAT_LABELS[publish.format] || '纯文字')
   return <div className="md-production-page">
-    <div className="md-production-heading"><div><h2>{t('发布')}</h2><p>{t('核对文案与素材，发布时使用同一个版本')}</p></div><button type="button" className="md-btn" onClick={manualPackage}><Icon name="save" size={15} />{t('导出发布清单')}</button></div>
-    <div className="md-publish-layout"><div className="md-publish-editor"><section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布到哪里')}</h3><span>{t('平台设置')}</span></div><div className="md-platform-options">{PLATFORMS.map(platform => <button type="button" key={platform} aria-pressed={publish.platform === platform} className={publish.platform === platform ? 'is-on' : ''} onClick={() => patch({ platform })}>{t(platform)}</button>)}</div>{browserMode ? <p>{t('浏览器账号在下方麦田配置中登录和人工核对。')}</p> : <PublishAccount publishing={publishing} />}</section>
-      <section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布内容')}</h3><Segmented label={t('发布类型')} value={publish.format} onChange={format => patch({ format })} options={[{ value: 'video', label: t('视频') }, { value: 'images', label: t('图文') }, { value: 'text', label: t('纯文字') }, { value: 'article', label: t('文章') }]} /></div>{draft.publishChanges.length ? <div className="md-publish-source-notice" role="status"><p>{t('稿件或平台已更新，已保留你编辑的发布内容')}</p><button type="button" className="md-btn is-small" onClick={syncPublish}>{t('同步变化字段')}</button></div> : null}<Field label="发布标题"><input value={publish.title} onChange={e => patch({ title: e.target.value })} /><small>{t('{n} 个字符', { n: [...publish.title].length })}</small></Field><Field label="正文 / 简介"><textarea rows={6} value={publish.description} placeholder={t('写下这一版要发布的正文')} onChange={e => patch({ description: e.target.value })} /></Field><Field label="话题"><input value={publish.tags} placeholder={t('#话题一 #话题二')} onChange={e => patch({ tags: e.target.value })} /></Field><div className="md-publish-media-select">{publish.format === 'video' ? <Field label="发布视频"><select value={draft.selectedVideo} onChange={e => update({ selectedVideo: e.target.value })}><option value="">{t('选择一个完整成片')}</option>{assets.filter(a => a.type === 'video').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : publish.format === 'images' ? <div className="md-publish-images"><span>{t('发布图片（按选择顺序）')}</span>{assets.filter(a => a.type === 'image').map(a => <label key={a.id}><input type="checkbox" checked={draft.imageIds.includes(a.id)} onChange={e => update(d => ({ imageIds: e.target.checked ? [...d.imageIds, a.id] : d.imageIds.filter(id => id !== a.id) }))} /><span>{draft.imageIds.includes(a.id) ? `${draft.imageIds.indexOf(a.id) + 1}. ` : ''}{a.name}</span></label>)}</div> : null}{useCover ? <Field label="发布封面"><select value={draft.selectedCover} onChange={e => update({ selectedCover: e.target.value })}><option value="">{t('选择封面图片')}</option>{assets.filter(a => a.type === 'image').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : null}</div></section>
-      {articleImages ? <ArticleImagePicker assets={assets} onInsert={marker => patch({ description: `${publish.description.trimEnd()}\n\n${marker}\n\n` })} /> : null}
-      <PublishMethod id={item.id} publish={publish} patch={patch} />
-      {apiMode && !publishing.configured && publishing.known ? <p className="md-publish-pending">{t('这个平台当前不能 API 投稿，可切回手动发布。')}</p> : null}
-      {apiMode ? <PublishControls publishing={publishing} flow={flow} /> : null}
-      <MaitianExport item={item} draft={draft} update={update} assets={assets} publishing={publishing} />
-      <PublishHistory id={item.id} publishing={publishing} />
-    </div><aside className="md-publish-review"><section className="md-work-panel md-publish-preview"><div className="md-work-panel-title"><h3>{t('发布预览')}</h3><span>{t(publish.platform)}</span></div><div className="md-release-preview">{['text', 'article'].includes(publish.format) ? publish.format === 'article' && cover ? <img src={cover.src} alt={t('发布封面')} /> : <Icon name="pen" size={36} /> : publish.format === 'images' ? images[0] ? <img src={images[0].src} alt={t('发布图片')} /> : <Icon name="image" size={36} /> : previewCover ? <img src={previewCover.src} alt={t('发布封面')} /> : video ? <video src={video.src} poster={video.poster} preload="metadata" muted /> : <Icon name="film" size={36} />}{publish.format === 'video' ? <span className="md-release-type"><Icon name="play" size={13} fill />{t('视频')}</span> : ['text', 'article'].includes(publish.format) ? <span className="md-release-type">{t(publish.format === 'article' ? '文章' : '纯文字')}</span> : <span className="md-release-type">{images.length} {t('张图')}</span>}</div><h4>{publish.title || t('还没有标题')}</h4><p>{publish.description || t('还没有正文')}</p><button type="button" className="md-inline-link" onClick={() => onTab('assets')}>{t('去素材页检查文件')}<Icon name="chevR" size={12} /></button></section>
-      <PublishChecklist mode={browserMode ? 'browser' : publish.mode} locked={publishing.locked} flow={flow} onCopy={() => copy(`${publish.title}\n\n${publish.description}\n\n${publish.tags}`)} />
-    </aside></div>
+    <div className="md-production-heading"><div><h2>{t('发布')}</h2><p>{t('先配齐文案与素材，再选择发布渠道和目标平台')}</p></div><button type="button" className="md-btn" onClick={manualPackage}><Icon name="save" size={15} />{t('导出发布清单')}</button></div>
+    <nav className="md-publish-stepper" aria-label={t('发布步骤')}>
+      <button type="button" className={step === 'prepare' ? 'is-on' : ''} aria-current={step === 'prepare' ? 'step' : undefined} onClick={() => setStep('prepare')}><i>1</i><div><strong>{t('资料配齐')}</strong><span>{t('标题、正文与素材')}</span></div></button>
+      <Icon name="chevR" size={14} />
+      <button type="button" className={step === 'channel' ? 'is-on' : ''} aria-current={step === 'channel' ? 'step' : undefined} onClick={() => setStep('channel')}><i>2</i><div><strong>{t('渠道与发布')}</strong><span>{t('选渠道、平台并执行')}</span></div></button>
+    </nav>
+    {step === 'prepare' ? <div className="md-publish-layout">
+      <div className="md-publish-editor">
+        <section className="md-work-panel">
+          <div className="md-work-panel-title"><h3>{t('发布内容')}</h3><Segmented label={t('发布类型')} value={publish.format} onChange={format => patch({ format })} options={[{ value: 'video', label: t('视频') }, { value: 'images', label: t('图文') }, { value: 'text', label: t('纯文字') }, { value: 'article', label: t('文章') }]} /></div>
+          {draft.publishChanges.length ? <div className="md-publish-source-notice" role="status"><p>{t('稿件或平台已更新，已保留你编辑的发布内容')}</p><button type="button" className="md-btn is-small" onClick={syncPublish}>{t('同步变化字段')}</button></div> : null}
+          <Field label="发布标题"><input value={publish.title} onChange={e => patch({ title: e.target.value })} /><small>{t('{n} 个字符', { n: [...publish.title].length })}</small></Field>
+          <Field label="正文 / 简介"><textarea rows={6} value={publish.description} placeholder={t('写下这一版要发布的正文')} onChange={e => patch({ description: e.target.value })} /></Field>
+          <Field label="话题"><input value={publish.tags} placeholder={t('#话题一 #话题二')} onChange={e => patch({ tags: e.target.value })} /></Field>
+          <div className="md-publish-media-select">
+            {publish.format === 'video' ? <Field label="发布视频"><select value={draft.selectedVideo} onChange={e => update({ selectedVideo: e.target.value })}><option value="">{t('选择一个完整成片')}</option>{assets.filter(a => a.type === 'video').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : publish.format === 'images' ? <div className="md-publish-images"><span>{t('发布图片（按选择顺序）')}</span>{assets.filter(a => a.type === 'image').map(a => <label key={a.id}><input type="checkbox" checked={draft.imageIds.includes(a.id)} onChange={e => update(d => ({ imageIds: e.target.checked ? [...d.imageIds, a.id] : d.imageIds.filter(id => id !== a.id) }))} /><span>{draft.imageIds.includes(a.id) ? `${draft.imageIds.indexOf(a.id) + 1}. ` : ''}{a.name}</span></label>)}</div> : null}
+            {publish.format !== 'text' ? <Field label="发布封面"><select value={draft.selectedCover} onChange={e => update({ selectedCover: e.target.value })}><option value="">{t('选择封面图片')}</option>{assets.filter(a => a.type === 'image').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : null}
+          </div>
+        </section>
+        {publish.format === 'article' ? <ArticleImagePicker assets={assets} onInsert={marker => patch({ description: `${publish.description.trimEnd()}\n\n${marker}\n\n` })} /> : null}
+      </div>
+      <aside className="md-publish-review">
+        <section className="md-work-panel md-publish-preview"><div className="md-work-panel-title"><h3>{t('发布预览')}</h3><span>{t(FORMAT_LABELS[publish.format] || '视频')}</span></div><div className="md-release-preview">{['text', 'article'].includes(publish.format) ? publish.format === 'article' && cover ? <img src={cover.src} alt={t('发布封面')} /> : <Icon name="pen" size={36} /> : publish.format === 'images' ? images[0] ? <img src={images[0].src} alt={t('发布图片')} /> : <Icon name="image" size={36} /> : previewCover ? <img src={previewCover.src} alt={t('发布封面')} /> : video ? <video src={video.src} poster={video.poster} preload="metadata" muted /> : <Icon name="film" size={36} />}{publish.format === 'video' ? <span className="md-release-type"><Icon name="play" size={13} fill />{t('视频')}</span> : ['text', 'article'].includes(publish.format) ? <span className="md-release-type">{t(publish.format === 'article' ? '文章' : '纯文字')}</span> : <span className="md-release-type">{images.length} {t('张图')}</span>}</div><h4>{publish.title || t('还没有标题')}</h4><p>{publish.description || t('还没有正文')}</p><button type="button" className="md-inline-link" onClick={() => onTab('assets')}>{t('去素材页检查文件')}<Icon name="chevR" size={12} /></button></section>
+        <section className="md-work-panel md-release-checks">
+          <div className="md-work-panel-title"><h3>{t('资料检查')}</h3><span>{basicReady}/{basicRequired.length}</span></div>
+          <ul className="md-publish-checklist">{basicChecks.map(row => <li key={row.text} className={row.done ? 'is-done' : ''}>
+            <i aria-hidden="true">{row.done ? <Icon name="check" size={12} /> : null}</i>
+            <div><span>{t(row.text)}</span></div>
+            <small>{t(row.done ? '已准备' : row.optional ? '可选' : '待处理')}</small>
+          </li>)}</ul>
+          <div className="md-publish-submit">
+            <button type="button" className="md-btn is-primary is-wide" onClick={() => setStep('channel')}>{t('下一步：选择发布渠道')}<Icon name="chevR" size={14} /></button>
+            <span>{t(basicReady === basicRequired.length ? '基础资料已配齐，继续选择渠道与平台。' : '也可先进入下一步查看各渠道要求。')}</span>
+          </div>
+        </section>
+      </aside>
+    </div> : <div className="md-publish-layout">
+      <div className="md-publish-editor">
+        <div className="md-publish-summary-bar">
+          <div><span className="md-publish-summary-tag">{t(FORMAT_LABELS[publish.format] || '视频')}</span><strong>{publish.title || t('还没有标题')}</strong><span>{mediaSummary}</span></div>
+          <button type="button" className="md-btn is-small" onClick={() => setStep('prepare')}><Icon name="chevL" size={13} />{t('返回修改资料')}</button>
+        </div>
+        <PublishMethod id={item.id} publish={publish} patch={patch} channelFirst apiPlatforms={API_PLATFORM_NAMES} defaultApiPlatform={API_PLATFORM_NAMES[0]} />
+        {browserMode ? <MaitianBundlePanel bundle={maitianBundle} /> : <section className="md-work-panel">
+          <div className="md-work-panel-title"><h3>{t(apiMode ? '选择投稿平台' : '选择目标平台')}</h3><span>{t(apiMode ? 'API 通道' : '手动发布')}</span></div>
+          <div className="md-platform-options">{(apiMode ? API_PLATFORM_NAMES : PLATFORMS).map(platform => <button type="button" key={platform} aria-pressed={publish.platform === platform} className={publish.platform === platform ? 'is-on' : ''} onClick={() => patch({ platform })}>{t(platform)}</button>)}</div>
+          {apiMode ? <PublishAccount publishing={publishing} /> : <p className="md-publish-pending" style={{ marginTop: 12 }}>{t('手动发布无需配置账号，可在右侧直接复制文案或导出发布清单。')}</p>}
+        </section>}
+        {apiMode && !publishing.configured && publishing.known ? <p className="md-publish-pending">{t('这个平台当前不能 API 投稿，可切换平台或改用手动发布。')}</p> : null}
+        {apiMode ? <PublishControls publishing={publishing} flow={flow} /> : null}
+        <PublishHistory id={item.id} publishing={publishing} />
+      </div>
+      <aside className="md-publish-review">
+        {browserMode ? <MaitianExportConsole bundle={maitianBundle} /> : <PublishChecklist mode={publish.mode} locked={publishing.locked} flow={flow} onCopy={() => copy(`${publish.title}\n\n${publish.description}\n\n${publish.tags}`)} />}
+      </aside>
+    </div>}
   </div>
 }

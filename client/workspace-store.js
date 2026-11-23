@@ -108,6 +108,10 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
           set(id, { revision: workspace.revision })
           throw new Error(t('服务端未完整保存封面提示词，已保留输入。请更新或重启服务后重试保存'))
         }
+        if (submitted.publish?.provider !== workspace.publish?.provider || submitted.publish?.mode !== workspace.publish?.mode) {
+          set(id, { revision: workspace.revision })
+          throw new Error(t('服务端未完整保存发布方式，已保留选择。请更新或重启服务后重试保存'))
+        }
         if (submitted.coverDesign && JSON.stringify(workspace.coverDesign) !== JSON.stringify(submitted.coverDesign)) {
           set(id, { revision: workspace.revision })
           throw new Error(t('服务端未完整保存封面设计，已保留输入。请更新或重启服务后重试保存'))

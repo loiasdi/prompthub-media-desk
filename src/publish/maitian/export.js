@@ -1,14 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { chmod, mkdir, rename, rm, writeFile, readFile, lstat } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { chmod, mkdir, rename, rm, writeFile, readFile, lstat, realpath } from 'node:fs/promises'
+import { extname, isAbsolute, join } from 'node:path'
 import { currentWorkspace } from '../../content-assets.js'
 import { withAssetUpload } from '../../asset-upload.js'
 import { sourceCopy } from '../../workspace-schema.js'
 import { inspectSelection, assetSummary } from '../snapshot.js'
 import { blocksDuplicate, readPublishRecords } from '../records.js'
-import { createProject, COVER_RATIOS, MAPPED_PLATFORMS } from './project.js'
+import { createProject, COVER_RATIOS, MAPPED_PLATFORMS, normalizePlatforms } from './project.js'
 import { checkFaststart, inspectSnapshot } from './media.js'
 import { MaitianError } from './errors.js'
 
@@ -16,8 +16,39 @@ const exec = promisify(execFile)
 const ID = /^[\w-]{1,160}$/
 const UUID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 
-export function captureProject(store, id, revision, platform) {
-  if (!ID.test(id || '') || !Object.hasOwn(MAPPED_PLATFORMS, platform)) throw new MaitianError('INVALID_TARGET', '稿件或目标平台无效', 400)
+export async function rememberExportLocation(configRoot, exportId, exportsRoot) {
+  if (!UUID.test(exportId)) throw new MaitianError('INVALID_EXPORT', '导出标识无效', 400)
+  const directory = await realpath(exportsRoot)
+  const index = join(configRoot, 'export-locations')
+  await mkdir(index, { recursive: true, mode: 0o700 })
+  const file = join(index, `${exportId}.json`)
+  const temporary = join(index, `.${exportId}-${randomUUID()}.tmp`)
+  try {
+    await writeFile(temporary, JSON.stringify({ version: 1, exportId, exportsRoot: directory }), { mode: 0o600, flag: 'wx' })
+    await rename(temporary, file)
+  } finally { await rm(temporary, { force: true }) }
+}
+
+export async function rememberedExportLocation(configRoot, exportId) {
+  if (!UUID.test(exportId)) throw new MaitianError('INVALID_EXPORT', '导出标识无效', 400)
+  try {
+    const record = JSON.parse(await readFile(join(configRoot, 'export-locations', `${exportId}.json`), 'utf8'))
+    if (record.version !== 1 || record.exportId !== exportId || typeof record.exportsRoot !== 'string' || !isAbsolute(record.exportsRoot)) return null
+    return await realpath(record.exportsRoot)
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    return null
+  }
+}
+
+function resolveTargets(platform, platforms) {
+  try { return normalizePlatforms(platform, platforms) }
+  catch { throw new MaitianError('INVALID_TARGET', '稿件或目标平台无效', 400) }
+}
+
+export function captureProject(store, id, revision, platform, platforms) {
+  if (!ID.test(id || '')) throw new MaitianError('INVALID_TARGET', '稿件或目标平台无效', 400)
+  resolveTargets(platform, platforms)
   const item = store.state.items.find(row => row.id === id)
   if (!item || item.sample || item.trashedAt) throw new MaitianError('INVALID_ITEM', '请选择非示例且不在回收站的稿件', 400)
   const workspace = currentWorkspace(item)
@@ -25,11 +56,15 @@ export function captureProject(store, id, revision, platform) {
   const copy = { ...workspace.publish }
   const source = sourceCopy(item)
   for (const field of ['title', 'description', 'platform', 'tags']) if (!workspace.publishEdited?.[field]) copy[field] = source[field]
+  if (!Array.isArray(platforms)) copy.platform = MAPPED_PLATFORMS[platform]
   return { workspace, copy }
 }
 
-export async function snapshotProject({ store, projectsRoot, engineRef, contract, validate, id, revision, platform, confirmExisting = false, inspect = inspectSnapshot, kind = 'task', onCapture = async () => {}, onReserve = async () => {}, beforeCopy, onReady = async () => {}, beforeCommit = async () => {}, onCommit = async () => {} }) {
-  if (!contract.operations.validate || !contract.platforms[platform]?.mapped) throw new MaitianError('UNSUPPORTED_PROJECT', '当前组件不支持此工程的映射与校验')
+export async function snapshotProject({ store, projectsRoot, engineRef, contract, validate, id, revision, platform, platforms, confirmExisting = false, inspect = inspectSnapshot, kind = 'task', onCapture = async () => {}, onReserve = async () => {}, beforeCopy, onReady = async () => {}, beforeCommit = async () => {}, onCommit = async () => {} }) {
+  let targets
+  try { targets = normalizePlatforms(platform, platforms) }
+  catch { throw new MaitianError('UNSUPPORTED_PROJECT', '当前组件不支持此工程的映射与校验') }
+  if (validate && (!contract?.operations?.validate || targets.some(target => !contract.platforms[target]?.mapped))) throw new MaitianError('UNSUPPORTED_PROJECT', '当前组件不支持此工程的映射与校验')
   const exportId = randomUUID()
   const staging = join(projectsRoot, `.pending-${exportId}`)
   const destination = join(projectsRoot, exportId)
@@ -42,8 +77,8 @@ export async function snapshotProject({ store, projectsRoot, engineRef, contract
       const captured = await store.run(async () => {
         await store.refresh()
         if (store.root !== root) throw new MaitianError('WORKSPACE_CHANGED', '工作台目录已变化，请重新导出')
-        const current = captureProject(store, id, revision, platform)
-        const existing = (await readPublishRecords(root)).some(row => row.itemId === id && row.platform === platform && blocksDuplicate(row))
+        const current = captureProject(store, id, revision, platform, platforms)
+        const existing = (await readPublishRecords(root)).some(row => row.itemId === id && targets.includes(row.platform) && blocksDuplicate(row))
         if (existing && confirmExisting !== true) throw new MaitianError('EXISTING_PUBLICATION', '该稿件可能已经上传；请核对并明确确认后再导出，避免外部重复发布')
         await onCapture({ root, ...current })
         return current
@@ -55,7 +90,8 @@ export async function snapshotProject({ store, projectsRoot, engineRef, contract
       if (['.mp4', '.m4v'].includes(videoExtension)) await checkFaststart(video.destination)
       const media = await inspect(video.destination, 'video')
       const covers = {}, assets = [{ ...assetSummary(video), file: `video${videoExtension}` }]
-      for (const [index, ratio] of COVER_RATIOS[platform].entries()) {
+      const ratios = [...new Set(targets.flatMap(target => COVER_RATIOS[target]))]
+      for (const [index, ratio] of ratios.entries()) {
         const selected = copy.browser?.covers?.[ratio]
         if (!selected) continue
         const image = await inspectSelection(root, id, workspace, selected, 'image', staging, index, { beforeCopy })
@@ -67,17 +103,17 @@ export async function snapshotProject({ store, projectsRoot, engineRef, contract
         covers[ratio] = file
         assets.push({ ...assetSummary(image), file, ratio })
       }
-      const data = createProject({ id: `${id}-${exportId}`, copy, platform, video: assets[0].file, covers, durationSec: media.duration })
+      const data = createProject({ id: `${id}-${exportId}`, copy, ...(Array.isArray(platforms) ? { platforms: targets } : { platform: targets[0] }), video: assets[0].file, covers, durationSec: media.duration })
       const files = ['publish.json', ...assets.map(asset => asset.file)]
-      const validation = await validate({ engineRef, data, files })
+      const validation = validate ? await validate({ engineRef, data, files }) : { errors: [], warnings: [] }
       if (validation.errors.length) throw new MaitianError('UPSTREAM_VALIDATION', validation.errors.join('\n'), 422)
       const projectDigest = createHash('sha256').update(JSON.stringify({ data, assets })).digest('hex')
       const manifest = {
         version: 1, provider: 'maitian', itemId: id, revision, snapshotId: exportId, kind,
-        ...(kind === 'export' && { exportId }), platform, projectDigest,
+        ...(kind === 'export' && { exportId }), platform: targets[0], platforms: targets, projectDigest,
         generatedAt: new Date().toISOString(), timezone: copy.mode === 'scheduled' ? copy.timezone : null,
-        engineVersion: engineRef.version, engineFingerprint: engineRef.fingerprint,
-        contractVersion: contract.contractVersion, assets, warnings: validation.warnings,
+        ...(engineRef && { engineVersion: engineRef.version, engineFingerprint: engineRef.fingerprint }),
+        ...(contract?.contractVersion && { contractVersion: contract.contractVersion }), assets, warnings: validation.warnings,
       }
       await writeFile(join(staging, 'publish.json'), JSON.stringify(data, null, 2), { mode: 0o600, flag: 'wx' })
       await writeFile(join(staging, 'media-desk-manifest.json'), JSON.stringify(manifest, null, 2), { mode: 0o600, flag: 'wx' })
@@ -85,8 +121,8 @@ export async function snapshotProject({ store, projectsRoot, engineRef, contract
       await onReady({ manifest })
       await store.run(async () => {
         await store.refresh()
-        if (store.root !== root || JSON.stringify(captureProject(store, id, revision, platform)) !== JSON.stringify(captured)) throw new MaitianError('REVISION_CHANGED', '发布信息或选材已变化，请重新导出')
-        const existing = (await readPublishRecords(root)).some(row => row.itemId === id && row.platform === platform && blocksDuplicate(row))
+        if (store.root !== root || JSON.stringify(captureProject(store, id, revision, platform, platforms)) !== JSON.stringify(captured)) throw new MaitianError('REVISION_CHANGED', '发布信息或选材已变化，请重新导出')
+        const existing = (await readPublishRecords(root)).some(row => row.itemId === id && targets.includes(row.platform) && blocksDuplicate(row))
         if (existing && confirmExisting !== true) throw new MaitianError('EXISTING_PUBLICATION', '文件准备期间出现已有投稿，请先核对平台结果')
         await rename(staging, destination)
         published = true
@@ -109,8 +145,9 @@ export async function exportProject({ exportsRoot, beforeArchive = async () => {
     // Archive a controlled, generated directory; no shell and no caller-supplied arguments.
     await exec('/usr/bin/tar', ['-czf', archive, '-C', exportsRoot, exportId], { timeout: 120_000, maxBuffer: 256_000, env: { ...process.env, COPYFILE_DISABLE: '1' } })
     await chmod(archive, 0o600)
-    return { exportId, projectDigest: snapshot.projectDigest, platform: snapshot.manifest.platform, engineVersion: snapshot.manifest.engineVersion,
-      warnings: snapshot.manifest.warnings, files: [...snapshot.files, 'media-desk-manifest.json'], downloadPath: `media-desk/publish/maitian/download?exportId=${exportId}` }
+    return { exportId, projectDigest: snapshot.projectDigest, platform: snapshot.manifest.platform, platforms: snapshot.manifest.platforms,
+      warnings: snapshot.manifest.warnings, files: [...snapshot.files, 'media-desk-manifest.json'],
+      downloadPath: `media-desk/publish/maitian/download?exportId=${exportId}` }
   } catch (error) {
     await rm(archive, { force: true })
     await rm(join(exportsRoot, exportId), { recursive: true, force: true })

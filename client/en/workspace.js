@@ -109,6 +109,7 @@ export const WORKSPACE = {
   "粘贴或编写封面提示词，例如：\n\n画面比例：\n封面标题：\n主体与表情：\n构图与背景：\n字体与排版：\n配色与光线：\n其他要求：": "Paste or write your cover prompt, for example:\n\nAspect ratio:\nHeadline:\nSubject and expression:\nComposition and background:\nTypography and layout:\nColors and lighting:\nOther requirements:",
 
   '服务端未完整保存视频提示词，已保留输入。请更新或重启服务后重试保存': 'The server did not save the full video prompt. Your input has been kept. Update or restart the server, then retry saving.',
+  '服务端未完整保存发布方式，已保留选择。请更新或重启服务后重试保存': 'The server did not save the publishing method. Your selection has been kept. Update or restart the server, then retry saving.',
   "从稿件到视频": "From manuscript to video",
   "全局参数与分段镜头保存在同一份文档，保留你的原始格式": "Keep global settings and grouped shots in one document, in your original format",
   "复制整份": "Copy document",

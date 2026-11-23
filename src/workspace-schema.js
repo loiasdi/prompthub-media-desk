@@ -1,6 +1,7 @@
 import { playableVideo } from './inspiration-source.js'
 import { emptyCoverDesign, sanitizeCoverDesign } from './cover-design-schema.js'
 import { MAX_PROMPT_TEXT } from './video-prompt-document.js'
+import { MAPPED_PLATFORMS, MAITIAN_COVER_RATIOS } from './publish/maitian/platforms.js'
 
 // 内容工作区的文件登记与字段校验。浏览器和 Host 共用文件身份规则。
 export const WORKSPACE_SCHEMA = 1
@@ -101,7 +102,8 @@ export function sanitizeWorkspace(item, input, current) {
   ws.publish.browser = {
     profileId: /^[a-zA-Z0-9_-]{1,60}$/.test(browser.profileId || '') ? browser.profileId : 'default',
     shortTitle: string(browser.shortTitle, 2000),
-    covers: Object.fromEntries(['3x4', '4x3'].filter(ratio => live.get(browser.covers?.[ratio])?.type === 'image').map(ratio => [ratio, browser.covers[ratio]])),
+    covers: Object.fromEntries(MAITIAN_COVER_RATIOS.filter(ratio => live.get(browser.covers?.[ratio])?.type === 'image').map(ratio => [ratio, browser.covers[ratio]])),
+    ...(Array.isArray(browser.platforms) ? { platforms: [...new Set(browser.platforms.filter(p => typeof p === 'string' && Object.hasOwn(MAPPED_PLATFORMS, p)))] } : {}),
   }
   ws.publishEdited = Object.fromEntries(['title', 'description', 'platform', 'tags'].map(key => [key, input.publishEdited?.[key] === true || key === 'tags' && input.publishEdited?.tags === undefined && Boolean(input.publish?.tags) && input.publishSource?.tags === undefined]))
   ws.publishSource = Object.fromEntries(['title', 'description', 'platform', 'tags'].map(key => [key, string(input.publishSource?.[key], key === 'description' ? 200000 : key === 'tags' ? 10000 : 2000)]))

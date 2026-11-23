@@ -17,6 +17,7 @@ import { MaitianConfig } from '../src/publish/maitian/config.js'
 import { inspectEngine } from '../src/publish/maitian/engine-loader.mjs'
 import { runComponent } from '../src/publish/maitian/runner-client.js'
 import { BrowserOperations } from '../src/publish/maitian/browser-operations.js'
+import { captureProject } from '../src/publish/maitian/export.js'
 import { invalidateAccount } from '../src/publish/maitian/account-state.js'
 import { acquireProfileLock } from '../src/publish/maitian/profile-lock.js'
 import { component } from './helpers/maitian-component.js'
@@ -95,6 +96,13 @@ test('缺少人工确认、过期预检或未选择浏览器方式，不创建�
   const changed = await f.assets.save('piece', f.ws.revision, { ...f.ws, publish: { ...f.ws.publish, provider: 'api' } })
   await assert.rejects(f.service.prepare({ ...f.request, revision: changed.revision }), error => error.code === 'BROWSER_SELECTION_REQUIRED')
   await assert.rejects(readFile(join(f.store.root, '.publish-records.json')), { code: 'ENOENT' })
+})
+
+test('直驱目标平台只覆盖工程快照的平台映射，不改写稿件平台', async t => {
+  const f = await fixture(t)
+  const captured = captureProject(f.store, 'piece', f.ws.revision, 'channels')
+  assert.equal(captured.copy.platform, '视频号')
+  assert.equal((await f.assets.read('piece')).publish.platform, '小红书')
 })
 
 test('固定文件期间组件更新要求重新确认，失败清理快照，不留下准备单', async t => {

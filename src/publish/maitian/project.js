@@ -1,7 +1,7 @@
 import { MaitianError } from './errors.js'
+import { MAPPED_PLATFORMS, COVER_RATIOS } from './platforms.js'
 
-export const MAPPED_PLATFORMS = { xhs: '小红书', channels: '视频号' }
-export const COVER_RATIOS = { xhs: ['3x4'], channels: ['3x4', '4x3'] }
+export { MAPPED_PLATFORMS, COVER_RATIOS } from './platforms.js'
 const validFile = value => typeof value === 'string' && value.length <= 240 && /^[^/\\\x00-\x1f]+\.(?:mp4|mov|m4v|png|jpg|jpeg)$/i.test(value) && !value.startsWith('.')
 
 export function topicsOf(value) {
@@ -31,19 +31,50 @@ export function scheduleISO(when, timezone) {
   return new Date(matches[0]).toISOString()
 }
 
-export function createProject({ id, copy, platform, video, covers = {}, durationSec }) {
-  if (!Object.hasOwn(MAPPED_PLATFORMS, platform) || copy?.platform !== MAPPED_PLATFORMS[platform] || copy.format !== 'video') throw new MaitianError('UNMAPPED_PLATFORM', '当前麦田工程只支持小红书或视频号单篇视频', 400)
+export function normalizePlatforms(platform, platforms) {
+  if (Array.isArray(platforms)) {
+    const unique = [...new Set(platforms)]
+    if (!unique.length || unique.some(item => typeof item !== 'string' || !Object.hasOwn(MAPPED_PLATFORMS, item))) {
+      throw new MaitianError('UNMAPPED_PLATFORM', '请选择麦田支持的视频分发平台', 400)
+    }
+    return unique
+  }
+  if (typeof platform === 'string' && Object.hasOwn(MAPPED_PLATFORMS, platform)) return [platform]
+  throw new MaitianError('UNMAPPED_PLATFORM', '请选择麦田支持的视频分发平台', 400)
+}
+
+export function createProject({ id, copy, platform, platforms, video, covers = {}, durationSec }) {
+  const targets = normalizePlatforms(platform, platforms)
+  const singleLegacy = !Array.isArray(platforms)
+  if ((singleLegacy && copy?.platform !== MAPPED_PLATFORMS[targets[0]]) || copy?.format !== 'video') throw new MaitianError('UNMAPPED_PLATFORM', '稿件平台须与目标一致，麦田工程仅支持单篇视频', 400)
   if (!/^[\w-]{1,200}$/.test(id) || !validFile(video)) throw new MaitianError('INVALID_PROJECT', '工程标识或视频文件名无效', 400)
   if (typeof copy.title !== 'string' || typeof copy.description !== 'string' || copy.title.length > 2000 || copy.description.length > 200000) throw new MaitianError('INVALID_COPY', '发布文案无效', 400)
+  const allowedRatios = new Set(targets.flatMap(target => COVER_RATIOS[target]))
   const chosen = {}
   for (const [ratio, file] of Object.entries(covers)) {
-    if (!COVER_RATIOS[platform].includes(ratio) || !validFile(file) || !/\.(?:png|jpe?g)$/i.test(file)) throw new MaitianError('INVALID_COVER', '工程封面无效', 400)
+    if (!allowedRatios.has(ratio) || !validFile(file) || !/\.(?:png|jpe?g)$/i.test(file)) throw new MaitianError('INVALID_COVER', '工程封面无效', 400)
     chosen[ratio] = file
   }
-  const fields = platform === 'xhs' ? { title: copy.title, body: copy.description } : { shortTitle: copy.browser?.shortTitle || '', body: copy.description }
+  const topics = topicsOf(copy.tags || '')
+  const platformEntries = {}
+  const caption = [copy.title, copy.description, topics.map(topic => `#${topic}`).join(' ')].filter(value => value.trim()).join('\n\n')
+  for (const target of targets) {
+    let fields
+    if (target === 'channels') {
+      const shortTitle = typeof copy.browser?.shortTitle === 'string' ? copy.browser.shortTitle.trim() : ''
+      if (!shortTitle) throw new MaitianError('INVALID_COPY', '选择视频号时必须填写视频号短标题', 400)
+      fields = { shortTitle, body: copy.description, topics }
+    }
+    else if (target === 'bilibili' || target === 'youtube') fields = { title: copy.title, desc: copy.description, tags: topics }
+    else if (target === 'x') fields = { text: caption }
+    else if (target === 'instagram') fields = { caption }
+    else fields = { title: copy.title, body: copy.description, topics }
+    const selectedCovers = COVER_RATIOS[target].filter(ratio => Object.hasOwn(chosen, ratio))
+    platformEntries[target] = { ...fields, covers: target === 'instagram' ? selectedCovers.slice(0, 1) : selectedCovers }
+  }
   const data = {
     version: 1, id, name: copy.title, video, requiredTags: [], covers: chosen,
-    platforms: { [platform]: { ...fields, topics: topicsOf(copy.tags || ''), covers: Object.keys(chosen) } },
+    platforms: platformEntries,
   }
   if (Number.isFinite(durationSec) && durationSec > 0) data.durationSec = durationSec
   if (copy.mode === 'scheduled') {

@@ -49,18 +49,12 @@ export class MaitianPublishing {
     }
     return this.public()
   }
-  async export(request) {
-    const options = this.config.resolve()
-    const componentDir = options.exportComponentDir || (options.source === 'local' ? options.localComponentDir : '')
-    if (!componentDir) throw new MaitianError('EXPORT_COMPONENT_REQUIRED', '请配置日常浏览器已安装的麦田原版组件目录，用于只读校验导出工程')
-    const engineRef = await discoverEngine({ source: 'local', localComponentDir: componentDir })
-    const contract = await this.run({ nodePath: options.nodePath, engineRef, op: 'hello' })
+  async export(request, exportsRoot = join(this.config.root, 'exports')) {
     return exportProject({
-      store: this.store, exportsRoot: join(this.config.root, 'exports'), engineRef, contract,
-      id: request.id, revision: request.revision, platform: request.platform, confirmExisting: request.confirmExisting,
-      beforeCopy: ({ sizeBytes }) => checkSnapshotDisk(join(this.config.root, 'exports'), sizeBytes),
-      beforeArchive: ({ sizeBytes }) => checkSnapshotDisk(join(this.config.root, 'exports'), sizeBytes),
-      validate: input => this.run({ nodePath: options.nodePath, op: 'validate', ...input }),
+      store: this.store, exportsRoot,
+      id: request.id, revision: request.revision, platform: request.platform, platforms: request.platforms, confirmExisting: request.confirmExisting,
+      beforeCopy: ({ sizeBytes }) => checkSnapshotDisk(exportsRoot, sizeBytes),
+      beforeArchive: ({ sizeBytes }) => checkSnapshotDisk(exportsRoot, sizeBytes),
     })
   }
   async browser(op, { platform, operationId: pageOperationId } = {}) {
@@ -80,7 +74,7 @@ export class MaitianPublishing {
       browser: { root: this.config.root, profileDir: options.profileDir, profileId: options.profileId, chromePath: options.chromePath, port: options.port },
     })
   }
-  archive(exportId) { return exportedArchive(join(this.config.root, 'exports'), exportId) }
+  archive(exportId, exportsRoot = join(this.config.root, 'exports')) { return exportedArchive(exportsRoot, exportId) }
   prepare(request) { return prepareTask(this, request) }
   start(request) { return startTask(this, request) }
   cancel(request) { return cancelTask(this, request) }

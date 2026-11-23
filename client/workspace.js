@@ -109,7 +109,7 @@ export const importWorkspaceFiles = (id, files, folder) => workspaceStore.import
 export const recycleWorkspaceAsset = (id, assetId, restore) => workspaceStore.recycle(id, assetId, restore)
 export const runCoverAction = (item, path, body) => workspaceStore.action(item.id, path, body)
 export const prepareWorkspacePublish = (id, platform, options) => workspaceStore.action(id, 'publish/prepare', { platform, options })
-export const exportMaitianProject = (id, platform, confirmExisting) => workspaceStore.action(id, 'publish/maitian/export', { platform, confirmExisting })
+export const exportMaitianProject = (id, target, confirmExisting) => workspaceStore.action(id, 'publish/maitian/export', Array.isArray(target) ? { platforms: target, confirmExisting } : { platform: target, confirmExisting })
 export const prepareMaitianPublish = (id, platform, account) => workspaceStore.action(id, 'publish/maitian/prepare', { platform, account })
 export const cancelWorkspaceImport = id => workspaceStore.cancelImport(id)
 

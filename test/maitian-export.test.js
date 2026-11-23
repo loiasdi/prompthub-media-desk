@@ -21,6 +21,7 @@ import { runComponent } from '../src/publish/maitian/runner-client.js'
 import { inspectSnapshot } from '../src/publish/maitian/media.js'
 import { route } from '../src/host.js'
 import { component } from './helpers/maitian-component.js'
+import { MAITIAN_PLATFORMS } from '../src/publish/maitian/platforms.js'
 
 const exec = promisify(execFile)
 const id = 'piece'
@@ -72,12 +73,55 @@ test('工程导出固定素材、保存来源摘要、生成可独立解压的�
   assert.deepEqual(await readdir(join(f.store.root, 'pending')), [])
 })
 
-test('导出校验器路径独立于专用浏览器组件来源', async t => {
+test('工程导出不要求扩展源码目录，并写入传入的项目导出目录', async t => {
   const f = await fixture(t)
-  await f.config.save({ source: 'store', localComponentDir: '', exportComponentDir: f.original, enabled: false })
-  const result = await f.service.export(f.request)
+  await f.config.save({ source: 'store', localComponentDir: '', enabled: false })
+  const output = join(f.root, 'project-export')
+  const result = await f.service.export(f.request, output)
   assert.equal(result.platform, 'xhs')
   assert.equal(f.service.public().enabled, false)
+  assert.equal((await readdir(output)).includes(result.exportId), true)
+  assert.equal((await readdir(output)).includes(`${result.exportId}.tar.gz`), true)
+  assert.equal((await f.service.archive(result.exportId, output)).size > 0, true)
+})
+
+test('七平台与 16:9 封面选择保存后重启可恢复，导出压缩包含所有平台且新增平台参与防重', async t => {
+  const f = await fixture(t)
+  const platforms = MAITIAN_PLATFORMS.map(p => p.id)
+  const saved = await f.assets.save(id, f.ws.revision, { ...f.ws, publish: { ...f.ws.publish, browser: { ...f.ws.publish.browser, platforms: [...platforms, 'unsupported', 'xhs'], covers: { '16x9': f.cover.id } } } })
+  const restored = new Store(f.store.root)
+  await restored.refresh()
+  const browser = restored.state.items.find(item => item.id === id).workspace.publish.browser
+  assert.deepEqual(browser.platforms, platforms)
+  assert.equal(browser.covers['16x9'], f.cover.id)
+  const output = join(f.root, 'all-platforms')
+  const result = await exportProject({ store: restored, exportsRoot: output, id, revision: saved.revision, platforms, inspect: async () => ({ duration: 2 }) })
+  const unpack = join(f.root, 'all-unpacked')
+  await mkdir(unpack)
+  await exec('/usr/bin/tar', ['-xzf', join(output, `${result.exportId}.tar.gz`), '-C', unpack])
+  const folder = join(unpack, result.exportId)
+  const data = JSON.parse(await readFile(join(folder, 'publish.json'), 'utf8'))
+  assert.deepEqual(Object.keys(data.platforms), platforms)
+  assert.deepEqual(data.platforms.youtube.covers, ['16x9'])
+  assert.deepEqual(data.platforms.instagram.covers, ['16x9'])
+  assert.deepEqual(await readFile(join(folder, data.covers['16x9'])), await readFile(new URL('../assets/ink.jpg', import.meta.url)))
+  await writePublishRecords(restored.root, [{ taskId: 'existing-youtube', itemId: id, platform: 'youtube', status: 'published' }])
+  await assert.rejects(exportProject({ store: restored, exportsRoot: output, id, revision: saved.revision, platforms, inspect: async () => ({ duration: 2 }) }), error => error.code === 'EXISTING_PUBLICATION')
+})
+
+test('多平台打包导出把小红书和视频号写入同一份 publish.json 并统一校验防重', async t => {
+  const f = await fixture(t)
+  const output = join(f.root, 'multi-export')
+  const result = await f.service.export({ id, revision: f.ws.revision, platforms: ['xhs', 'channels'] }, output)
+  assert.deepEqual(result.platforms, ['xhs', 'channels'])
+  const data = JSON.parse(await readFile(join(output, result.exportId, 'publish.json'), 'utf8'))
+  assert.deepEqual(Object.keys(data.platforms), ['xhs', 'channels'])
+  assert.equal(data.platforms.xhs.title, '测试稿件')
+  assert.equal(data.platforms.channels.shortTitle, '视频号独立短标题')
+  await f.store.run(() => writePublishRecords(f.store.root, [{ itemId: id, platform: 'channels', status: 'unknown' }]))
+  await assert.rejects(f.service.export({ id, revision: f.ws.revision, platforms: ['xhs', 'channels'] }, output), error => error.code === 'EXISTING_PUBLICATION')
+  const confirmed = await f.service.export({ id, revision: f.ws.revision, platforms: ['xhs', 'channels'], confirmExisting: true }, output)
+  assert.deepEqual(confirmed.platforms, ['xhs', 'channels'])
 })
 
 test('M4V 可通过常规素材导入并以原扩展名进入麦田工程', async t => {
@@ -126,8 +170,10 @@ test('导出期间阻止工作台迁移，已有上传需显式确认；不信�
 test('麦田 Host 接口保护写入来源、隐藏路径、下载完整工程，非法导出 ID 被拒绝', async t => {
   const f = await fixture(t)
   const originalExport = f.service.export.bind(f.service)
-  f.service.export = async body => exportProject({ ...f.input, ...body })
-  const desk = { maitianPublishing: f.service }
+  f.service.export = async (body, exportsRoot) => exportProject({ ...f.input, ...body, exportsRoot })
+  const exportsRoot = join(f.root, 'settings-export')
+  let configuredExportDir = exportsRoot
+  const desk = { maitianPublishing: f.service, settings: { read: async () => ({ exportDir: configuredExportDir }) } }
   const server = createServer((req, res) => route({}, f.store, desk, req, res).catch(() => { res.statusCode = 500; res.end() }))
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
@@ -150,11 +196,18 @@ test('麦田 Host 接口保护写入来源、隐藏路径、下载完整工程�
   const response = await post('export', f.request)
   assert.equal(response.status, 200)
   const result = await response.json()
+  assert.equal((await readdir(exportsRoot)).includes(result.exportId), true)
+  assert.equal((await readdir(exportsRoot)).includes(`${result.exportId}.tar.gz`), true)
   const download = await fetch(`http://127.0.0.1:${server.address().port}/` + result.downloadPath)
   assert.equal(download.status, 200)
   assert.equal(download.headers.get('content-type'), 'application/gzip')
   assert.equal(download.headers.get('cache-control'), 'no-store')
-  assert.deepEqual(Buffer.from(await download.arrayBuffer()), await readFile((await f.service.archive(result.exportId)).file))
+  const archiveBytes = Buffer.from(await download.arrayBuffer())
+  assert.deepEqual(archiveBytes, await readFile((await f.service.archive(result.exportId, exportsRoot)).file))
+  configuredExportDir = join(f.root, 'new-settings-export')
+  const oldLinkAfterSettingChange = await fetch(`http://127.0.0.1:${server.address().port}/` + result.downloadPath)
+  assert.equal(oldLinkAfterSettingChange.status, 200)
+  assert.deepEqual(Buffer.from(await oldLinkAfterSettingChange.arrayBuffer()), archiveBytes)
   assert.equal((await fetch(url + 'download?exportId=../config.json')).status, 400)
   assert.equal((await fetch(url + 'download?exportId=00000000-0000-0000-0000-000000000000')).status, 404)
   f.service.export = originalExport

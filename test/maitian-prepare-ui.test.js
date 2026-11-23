@@ -5,14 +5,14 @@ import { build } from 'esbuild'
 import React from 'react'
 import TestRenderer, { act } from 'react-test-renderer'
 
-const compiled = await build({ stdin: { contents: "export { MaitianPrepare } from './client/maitian-prepare.jsx'; export { MaitianExport } from './client/maitian-publish.jsx'; export { PublishMethod, publishMethod } from './client/publish-method.jsx'; export { PublishPage } from './client/content-workspace.jsx'; export { setLanguagePreference } from './client/i18n.js'", resolveDir: process.cwd() },
+const compiled = await build({ stdin: { contents: "export { MaitianPrepare } from './client/maitian-prepare.jsx'; export { MaitianExport, useMaitianBundle, MaitianExportConsole } from './client/maitian-publish.jsx'; export { PublishMethod, publishMethod } from './client/publish-method.jsx'; export { PublishPage } from './client/content-workspace.jsx'; export { setLanguagePreference } from './client/i18n.js'", resolveDir: process.cwd() },
   bundle: true, write: false, format: 'cjs', platform: 'node', external: ['react'], plugins: [{ name: 'workspace-actions', setup(build) {
     build.onResolve({ filter: /^\.\/workspace\.js$/ }, args => /\/client\/maitian-(?:prepare|publish)\.jsx$/.test(args.importer) ? { path: 'workspace', namespace: 'maitian-form-test' } : undefined)
     build.onLoad({ filter: /.*/, namespace: 'maitian-form-test' }, () => ({ contents: `export const prepareMaitianPublish = (...a) => globalThis.__form.prepare(...a); export const flushWorkspace = (...a) => globalThis.__form.flush(...a); export const exportMaitianProject = (...a) => globalThis.__form.export(...a); export const formatBytes = n => n + ' bytes';` }))
   } }] })
 const module = { exports: {} }
 new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
-const { MaitianPrepare, MaitianExport, PublishMethod, publishMethod, PublishPage, setLanguagePreference } = module.exports
+const { MaitianPrepare, MaitianExport, useMaitianBundle, MaitianExportConsole, PublishMethod, publishMethod, PublishPage, setLanguagePreference } = module.exports
 const digest = 'a'.repeat(64), taskId = 'aabbccdd-0000-4000-8000-112233445566'
 const text = renderer => JSON.stringify(renderer.toJSON())
 const button = (renderer, label) => renderer.root.findAllByType('button').find(node => node.children.includes(label))
@@ -26,6 +26,11 @@ const props = () => ({ item: { id: 'piece' }, draft: { selectedVideo: 'video', s
 const preparation = (extra = {}) => ({ preparation: { provider: 'maitian', status: 'prepared', taskId, projectDigest: digest, platform: 'xhs', profileId: 'default', engineVersion: '1.2.3', expiresAt: Date.now() + 180_000,
   account: { label: '人工账号', verification: 'user-confirmed', identityLimitAcknowledged: true }, draft: { title: '服务端固定标题', description: '服务端固定正文', tags: '#服务端话题', shortTitle: '短标题', mode: 'now' },
   assets: [{ id: 'video', filename: '成片.mp4', sizeBytes: 100, digest }], warnings: ['上游原始中文提示'], limits: { fillTimeoutMinutes: 360 }, ...extra } })
+
+function BundleView(props) {
+  const bundle = useMaitianBundle(props)
+  return React.createElement(MaitianExportConsole, { bundle })
+}
 async function render(t, initial = props()) {
   const before = globalThis.window
   globalThis.window = { addEventListener() {}, removeEventListener() {} }
@@ -38,6 +43,34 @@ async function render(t, initial = props()) {
   t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before; delete globalThis.__form; setLanguagePreference('zh') })
   return { renderer, value, calls, errors, update: async patch => { Object.assign(value, patch); await act(async () => renderer.update(React.createElement(MaitianPrepare, value))) } }
 }
+
+test('选择视频号时短标题为必填，填写后才允许生成工程', async t => {
+  const initial = props()
+  const value = { ...initial, publishing: { lockedPlatforms: {} }, update() {} }
+  let renderer
+  await act(async () => { renderer = TestRenderer.create(React.createElement(BundleView, value)) })
+  t.after(async () => act(async () => renderer.unmount()))
+  assert.equal(button(renderer, '校验并生成麦田工程包').props.disabled, true)
+  assert.match(text(renderer), /勾选视频号时请填写短标题/)
+  const draft = { ...value.draft, publish: { ...value.draft.publish, browser: { ...value.draft.publish.browser, shortTitle: '视频号标题' } } }
+  await act(async () => renderer.update(React.createElement(BundleView, { ...value, draft })))
+  assert.equal(button(renderer, '校验并生成麦田工程包').props.disabled, false)
+})
+
+test('多平台面板在保存归一化重排字段后仍接收迟到导出结果', async t => {
+  const initial = props()
+  initial.draft.publish.browser.shortTitle = '有效视频号短标题'
+  const value = { ...initial, publishing: { lockedPlatforms: {} }, update() {} }
+  let settle, renderer
+  globalThis.__form = { export: () => new Promise(resolve => { settle = resolve }) }
+  await act(async () => { renderer = TestRenderer.create(React.createElement(BundleView, value)) })
+  t.after(async () => { await act(async () => renderer.unmount()); delete globalThis.__form })
+  await act(async () => { button(renderer, '校验并生成麦田工程包').props.onClick() })
+  const normalized = { ...value.draft, publish: Object.fromEntries(Object.entries(value.draft.publish).reverse()) }
+  await act(async () => renderer.update(React.createElement(BundleView, { ...value, draft: normalized })))
+  await act(async () => settle({ downloadPath: '/normalized-bundle', warnings: [] }))
+  assert.equal(renderer.root.findByType('a').props.href, '/normalized-bundle')
+})
 async function confirmAccount(renderer) {
   await fill(renderer, '目标账号标签', '人工账号')
   await fill(renderer, '我已在专用 Chrome 核对本次目标账号', true)
@@ -60,6 +93,8 @@ test('发布方式区分 provider 与时间，旧手动草稿不自动变为 API
   await act(async () => radio('manual').props.onChange())
   assert.deepEqual(changes.at(-1), { provider: 'api', mode: 'manual' })
   await act(async () => renderer.update(React.createElement(PublishMethod, { id: 'piece', publish: { ...initial, platform: 'B站' }, patch() {} })))
+  assert.equal(radio('maitian').props.disabled, false)
+  await act(async () => renderer.update(React.createElement(PublishMethod, { id: 'piece', publish: { ...initial, platform: '快手' }, patch() {} })))
   assert.equal(radio('maitian').props.disabled, true)
 })
 
@@ -170,7 +205,7 @@ test('不完整确认单响应不能显示开始按钮；英文界面保留上�
   assert.ok(button(renderer, 'Confirm and start filling'))
 })
 
-test('真实发布页选择浏览器时不读 API 账号参数，也不显示 API 确认投稿入口', async t => {
+test('真实发布页支持两步流程：麦田模式不读 API 账号参数，切到 API 后展示投稿入口', async t => {
   const calls = [], before = globalThis.window
   globalThis.window = { addEventListener() {}, removeEventListener() {} }
   t.mock.method(globalThis, 'fetch', async url => {
@@ -184,9 +219,12 @@ test('真实发布页选择浏览器时不读 API 账号参数，也不显示 AP
   await act(async () => { renderer = TestRenderer.create(React.createElement(PublishPage, { ...initial, draft: { ...initial.draft, publish }, update() {}, onTab() {}, syncPublish() {} })) })
   t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before })
   assert.equal(calls.some(url => url.includes('options?')), false)
+  assert.ok(button(renderer, '下一步：选择发布渠道'))
+  await act(async () => button(renderer, '下一步：选择发布渠道').props.onClick())
   assert.equal(button(renderer, '检查并准备发布'), undefined)
   assert.doesNotMatch(text(renderer), /稿件类型/)
-  assert.match(text(renderer), /浏览器账号在下方麦田配置/)
+  assert.match(text(renderer), /选择麦田打包平台/)
+  assert.ok(button(renderer, '麦田设置'))
   await act(async () => renderer.update(React.createElement(PublishPage, { ...initial, draft: { ...initial.draft, publish: { ...publish, provider: 'api' } }, update() {}, onTab() {}, syncPublish() {} })))
   assert.equal(calls.some(url => url.includes('options?platform=bilibili')), true)
   assert.ok(button(renderer, '检查并准备发布'))
@@ -224,4 +262,48 @@ test('完整麦田表单阻止重复准备与重复开始，切换稿件后不�
   await act(async () => renderer.update(React.createElement(MaitianExport, { ...value, item: { id: 'other' } })))
   await act(async () => { release(preparation()); await first })
   assert.equal(renderer.root.findAllByProps({ role: 'dialog' }).length, 0)
+})
+
+test('发布页展示七个麦田平台，勾选 YouTube 后选择 16:9 封面并连同平台列表导出', async t => {
+  const before = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ platforms: {}, jobs: [], lockedPlatforms: {} }))
+  const initial = props()
+  initial.assets.push({ id: 'wide', type: 'image', name: '宽屏封面.jpg', src: 'wide.jpg' })
+  let exported, renderer
+  globalThis.__form = { export: async (...args) => { exported = args; return { downloadPath: '/bundle', warnings: [] } } }
+  function Page() {
+    const [draft, setDraft] = React.useState(initial.draft)
+    return React.createElement(PublishPage, { ...initial, draft, initialStep: 'channel', update: patch => setDraft(previous => ({ ...previous, ...patch })), onTab() {}, syncPublish() {} })
+  }
+  await act(async () => { renderer = TestRenderer.create(React.createElement(Page)) })
+  t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before; delete globalThis.__form })
+  const platforms = renderer.root.findByProps({ className: 'md-maitian-platforms' }).findAllByType('label')
+  assert.deepEqual(platforms.map(label => nodeText(label.findByType('strong'))), ['B站', '小红书', '抖音', '视频号', 'YouTube', 'X', 'Instagram'])
+  await act(async () => platforms[4].findByType('input').props.onChange())
+  const wide = renderer.root.findAllByType('label').find(label => /工程封面\s*16x9/.test(nodeText(label)))
+  assert.ok(wide)
+  await act(async () => wide.findByType('select').props.onChange({ target: { value: 'wide' } }))
+  assert.equal(wide.findByType('select').props.value, 'wide')
+  await act(async () => button(renderer, '校验并生成麦田工程包').props.onClick())
+  assert.deepEqual(exported, ['piece', ['xhs', 'channels', 'youtube'], false])
+  assert.ok(renderer.root.findByType('a'))
+})
+
+test('直驱目标平台可独立于稿件平台选择', async t => {
+  const before = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  t.mock.method(globalThis, 'fetch', async url => url.includes('maitian/config')
+    ? Response.json({ enabled: false, profileId: 'default', port: 9333, source: 'store', diagnostic: {}, implementation: { prepare: true, directFill: false } })
+    : Response.json({ platforms: {}, jobs: [], lockedPlatforms: {} }))
+  const initial = props(), updates = []
+  let renderer
+  await act(async () => { renderer = TestRenderer.create(React.createElement(PublishPage, { ...initial, initialStep: 'channel', update: patch => updates.push(patch), onTab() {}, syncPublish() {} })) })
+  t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before })
+  const settingButton = button(renderer, '麦田设置')
+  await act(async () => settingButton.props.onClick())
+  const target = renderer.root.findAllByType('label').find(label => /直驱目标平台/.test(nodeText(label))).findByType('select')
+  await act(async () => target.props.onChange({ target: { value: 'channels' } }))
+  assert.equal(updates.length, 0)
+  assert.match(text(renderer), /直驱快照会按选定目标平台生成，不会修改稿件的平台字段/)
 })

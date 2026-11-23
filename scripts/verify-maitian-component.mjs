@@ -16,6 +16,7 @@ import { MaitianPublishing } from '../src/publish/maitian/service.js'
 import { discoverEngine, inspectEngine, loadEngine } from '../src/publish/maitian/engine-loader.mjs'
 import { probeChrome } from '../src/publish/maitian/contract.js'
 import { runComponent } from '../src/publish/maitian/runner-client.js'
+import { MAITIAN_PLATFORMS, COVER_RATIOS } from '../src/publish/maitian/platforms.js'
 
 const exec = promisify(execFile)
 const script = fileURLToPath(import.meta.url)
@@ -95,7 +96,7 @@ async function verify(component, destination, installedConfigDir) {
   const sourceVideo = fileURLToPath(new URL('../assets/v-ink.mp4', import.meta.url))
   const sourceImage = fileURLToPath(new URL('../assets/ink.jpg', import.meta.url))
   const sourceDigests = [sha256(await readFile(sourceVideo)), sha256(await readFile(sourceImage))]
-  for (const [ratio, size] of [['3x4', '300:400'], ['4x3', '400:300']]) {
+  for (const [ratio, size] of [['3x4', '300:400'], ['4x3', '400:300'], ['16x9', '640:360']]) {
     await exec('ffmpeg', ['-nostdin', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-i', sourceImage, '-vf', `scale=${size}`, '-frames:v', '1', join(fixtures, `${ratio}.jpg`)], { timeout: 20_000 })
   }
   const store = new Store(join(root, 'workspace'), { markdown: false })
@@ -103,7 +104,7 @@ async function verify(component, destination, installedConfigDir) {
   let config = isolatedConfig
   if (installedConfig) {
     // Export to the new report directory, but use the actual installed profile and Node settings.
-    config = { root: isolatedConfig.root, resolve: () => ({ ...installedOptions, exportComponentDir: original }), public: () => installedConfig.public() }
+    config = { root: isolatedConfig.root, resolve: () => installedOptions, public: () => installedConfig.public() }
   } else await isolatedConfig.save({ source: 'local', localComponentDir: original })
   const nodePath = config.resolve().nodePath
   const operations = [], runners = []
@@ -118,45 +119,59 @@ async function verify(component, destination, installedConfigDir) {
   assert.equal(probe.implementation.directFill, false)
   if (installedEngine) assert.equal(probe.diagnostic.fingerprint, installedEngine.fingerprint, 'Installed component changed during verification')
   const cases = [], assets = new ContentAssets(store)
-  for (const [platform, name] of [['xhs', '小红书'], ['channels', '视频号']]) {
-    assert.equal(probe.diagnostic.platforms[platform]?.mapped, true)
+  const targets = [...MAITIAN_PLATFORMS.map(p => ({ platform: p.id, name: p.name, platforms: [p.id] })), { platform: 'all', name: '小红书', platforms: MAITIAN_PLATFORMS.map(p => p.id) }]
+  for (const { platform, name, platforms } of targets) {
+    for (const target of platforms) assert(probe.diagnostic.platforms[target]?.fields, `Original platform is unavailable: ${target}`)
     for (const mode of ['now', 'scheduled']) {
       const id = `${platform}-${mode}`
       await store.mutate('', state => { state.items.push({ id, title: '本地工程验收', body: '核对文案、封面与话题，仅检查工程格式。', platform: name, tags: ['工程校验', '验证样例'] }) }, { undoable: false })
       const video = await assets.import(id, createReadStream(sourceVideo), { name: '成片.mp4', revision: 0 })
       const vertical = await assets.import(id, createReadStream(join(fixtures, '3x4.jpg')), { name: '竖封面.jpg', revision: video.workspace.revision })
       const horizontal = await assets.import(id, createReadStream(join(fixtures, '4x3.jpg')), { name: '横封面.jpg', revision: vertical.workspace.revision })
-      const covers = { '3x4': vertical.asset.id, ...(platform === 'channels' && { '4x3': horizontal.asset.id }) }
+      const wide = await assets.import(id, createReadStream(join(fixtures, '16x9.jpg')), { name: '宽屏封面.jpg', revision: horizontal.workspace.revision })
+      const allCovers = { '3x4': vertical.asset.id, '4x3': horizontal.asset.id, '16x9': wide.asset.id }
+      const covers = Object.fromEntries([...new Set(platforms.flatMap(p => COVER_RATIOS[p]))].map(ratio => [ratio, allCovers[ratio]]))
       const when = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' }).format(new Date(Date.now() + 24 * 3600_000)).replace(' ', 'T')
-      const workspace = await assets.save(id, horizontal.workspace.revision, { ...horizontal.workspace, selectedVideo: video.asset.id,
-        publish: { ...horizontal.workspace.publish, provider: 'maitian', mode, when: mode === 'scheduled' ? when : '', timezone: 'Asia/Shanghai', browser: { profileId: 'default', shortTitle: '本地工程校验短标题', covers } } })
-      const result = await service.export({ id, revision: workspace.revision, platform })
+      const workspace = await assets.save(id, wide.workspace.revision, { ...wide.workspace, selectedVideo: video.asset.id,
+        publish: { ...wide.workspace.publish, provider: 'maitian', mode, when: mode === 'scheduled' ? when : '', timezone: 'Asia/Shanghai', browser: { profileId: 'default', shortTitle: '本地工程校验短标题', covers, platforms } } })
+      const { engineRef: exportEngine } = await service.resolve()
+      const result = await service.export({ id, revision: workspace.revision, ...(platform === 'all' ? { platforms } : { platform }) })
       const archive = await service.archive(result.exportId)
       await exec('/usr/bin/tar', ['-xzf', archive.file, '-C', unpacked], { timeout: 30_000 })
       const folder = join(unpacked, result.exportId)
       const data = JSON.parse(await readFile(join(folder, 'publish.json'), 'utf8'))
       const manifest = JSON.parse(await readFile(join(folder, 'media-desk-manifest.json'), 'utf8'))
-      assert.deepEqual(Object.keys(data.platforms), [platform])
-      assert.deepEqual(data.platforms[platform].covers, Object.keys(covers))
-      assert.deepEqual(data.platforms[platform].topics, ['工程校验', '验证样例'])
-      assert.equal(data.platforms[platform].body, '核对文案、封面与话题，仅检查工程格式。')
-      assert.equal(data.platforms[platform][platform === 'xhs' ? 'title' : 'shortTitle'], platform === 'xhs' ? '本地工程验收' : '本地工程校验短标题')
+      assert.deepEqual(Object.keys(data.platforms), platforms)
+      for (const target of platforms) {
+        const entry = data.platforms[target]
+        const selected = COVER_RATIOS[target].filter(ratio => covers[ratio])
+        assert.deepEqual(entry.covers, target === 'instagram' ? selected.slice(0, 1) : selected)
+        if (['x', 'instagram'].includes(target)) {
+          assert.equal(entry[target === 'x' ? 'text' : 'caption'], '本地工程验收\n\n核对文案、封面与话题，仅检查工程格式。\n\n#工程校验 #验证样例')
+        } else {
+          assert.deepEqual(entry[target === 'bilibili' || target === 'youtube' ? 'tags' : 'topics'], ['工程校验', '验证样例'])
+          assert.equal(entry[target === 'bilibili' || target === 'youtube' ? 'desc' : 'body'], '核对文案、封面与话题，仅检查工程格式。')
+          assert.equal(entry[target === 'channels' ? 'shortTitle' : 'title'], target === 'channels' ? '本地工程校验短标题' : '本地工程验收')
+        }
+      }
       assert.equal(Object.hasOwn(data, 'schedule'), mode === 'scheduled')
       if (mode === 'scheduled') assert.equal(data.schedule, new Date(`${when}:00+08:00`).toISOString())
       for (const ratio of Object.keys(covers)) assert.equal(sha256(await readFile(join(folder, data.covers[ratio]))), sha256(await readFile(join(fixtures, `${ratio}.jpg`))))
       for (const asset of manifest.assets) assert.equal(sha256(await readFile(join(folder, asset.file))), asset.digest)
       assert.equal(sha256(await readFile(join(folder, data.video))), sourceDigests[0])
       const engineRef = await inspectEngine(original), files = ['publish.json', ...manifest.assets.map(asset => asset.file)]
+      const exported = await service.run({ nodePath, op: 'validate', engineRef: exportEngine, data, files })
+      assert.equal(exported.errors.length, 0, JSON.stringify(exported))
       const missing = await service.run({ nodePath, op: 'validate', engineRef, data, files: files.filter(file => file !== data.video) })
       assert(missing.errors.length > 0, 'Original validator accepted a missing video')
-      const field = platform === 'xhs' ? 'title' : 'shortTitle'
-      const maximum = probe.diagnostic.platforms[platform].fields[field]?.[1]
+      const firstPlatform = platforms[0]
+      const [field, [, maximum]] = Object.entries(probe.diagnostic.platforms[firstPlatform].fields)[0]
       assert(Number.isInteger(maximum), 'Original field range is unavailable')
       const excessive = structuredClone(data)
-      excessive.platforms[platform][field] = '字'.repeat(maximum + 1)
+      excessive.platforms[firstPlatform][field] = '字'.repeat(maximum + 1)
       const rejected = await service.run({ nodePath, op: 'validate', engineRef, data: excessive, files })
       assert(rejected.errors.length > 0, 'Original validator accepted an excessive field')
-      cases.push({ platform, mode, exportId: result.exportId, schedule: data.schedule || null, covers: Object.keys(covers), assets: manifest.assets,
+      cases.push({ platform, platforms, mode, exportId: result.exportId, schedule: data.schedule || null, covers: Object.keys(covers), assets: manifest.assets,
         warnings: result.warnings, missingMediaRejected: true, excessiveFieldRejected: true })
     }
   }

@@ -43,14 +43,15 @@ test('折叠面板不访问 Host；预览拒绝请求或不完整响应不会显
   assert.equal(reads, 1)
   assert.match(text(renderer), /独立预览不连接发布平台/)
   assert.equal(button(renderer, '在专用 Chrome 安装麦田组件'), undefined)
-  assert.equal(button(renderer, '校验并导出麦田工程').props.disabled, true)
+  assert.equal(button(renderer, '导出麦田工程').props.disabled, false)
+  assert.doesNotMatch(text(renderer), /工程导出校验组件目录/)
   await act(async () => button(renderer, '收起').props.onClick())
   t.mock.method(globalThis, 'fetch', async () => Response.json({}))
   await expand(renderer)
   assert.match(text(renderer), /麦田配置响应不完整/)
 })
 
-test('启用浏览器与私有路径需保存后生效；未保存配置禁止安装、预检和导出', async t => {
+test('未保存的专用浏览器配置阻止浏览器操作，但不阻止工程导出', async t => {
   let saved = config(), posted
   const renderer = await render(t, async (_url, options) => {
     if (options.method === 'POST') { posted = JSON.parse(options.body); saved = config(posted) }
@@ -61,7 +62,7 @@ test('启用浏览器与私有路径需保存后生效；未保存配置禁止�
   await act(async () => input(renderer, '启用本机专用 Chrome').props.onChange({ target: { checked: true } }))
   await act(async () => input(renderer, '独立 Node 可执行文件').props.onChange({ target: { value: '/private/node' } }))
   assert.equal(button(renderer, '在专用 Chrome 安装麦田组件').props.disabled, true)
-  assert.equal(button(renderer, '校验并导出麦田工程').props.disabled, true)
+  assert.equal(button(renderer, '导出麦田工程').props.disabled, false)
   assert.match(text(renderer), /配置有未保存的修改/)
   await act(async () => button(renderer, '保存组件配置').props.onClick())
   assert.equal(posted.enabled, true)
@@ -108,23 +109,38 @@ test('填写保护时限可配置，未保存时阻断浏览器操作并说明�
   assert.equal(button(renderer, '检查平台登录').props.disabled, false)
 })
 
-test('稿件变更后丢弃迟到的导出结果；新工程显示原版警告与下载入口', async t => {
+test('稿件变更后丢弃迟到的导出结果；工程写入项目导出目录并保留下载入口', async t => {
   const initial = props()
   const renderer = await render(t, async () => Response.json(config()), initial)
   await expand(renderer)
   let settle, exportArgs
   globalThis.__maitianUIExport = (...args) => { exportArgs = args; return new Promise(resolve => { settle = resolve }) }
-  await act(async () => { button(renderer, '校验并导出麦田工程').props.onClick() })
+  await act(async () => { button(renderer, '导出麦田工程').props.onClick() })
   assert.deepEqual(exportArgs, ['draft', 'xhs', false])
   const updated = { ...initial, draft: { ...initial.draft, publish: { ...initial.draft.publish, title: '新标题' } } }
   await act(async () => renderer.update(React.createElement(MaitianExport, updated)))
   await act(async () => settle({ downloadPath: '/stale-archive', warnings: ['旧结果'] }))
   assert.equal(renderer.root.findAllByType('a').length, 0)
   globalThis.__maitianUIExport = async () => ({ downloadPath: 'media-desk/publish/maitian/download?exportId=new', warnings: ['上游原始校验提示'] })
-  await act(async () => button(renderer, '校验并导出麦田工程').props.onClick())
+  await act(async () => button(renderer, '导出麦田工程').props.onClick())
   assert.equal(renderer.root.findByType('a').props.href, 'media-desk/publish/maitian/download?exportId=new')
+  assert.match(text(renderer), /项目设置的成稿导出目录/)
   assert.match(text(renderer), /上游原始校验提示/)
-  assert.match(text(renderer), /使用专用 Chrome 中安装的原版麦田组件/)
+  assert.match(text(renderer), /项目设置的成稿导出目录/)
+})
+
+test('保存归一化只改变对象字段顺序时保留迟到的导出结果', async t => {
+  const initial = props()
+  const renderer = await render(t, async () => Response.json(config()), initial)
+  await expand(renderer)
+  let settle
+  globalThis.__maitianUIExport = () => new Promise(resolve => { settle = resolve })
+  await act(async () => { button(renderer, '导出麦田工程').props.onClick() })
+  const publish = initial.draft.publish
+  const reordered = Object.fromEntries(Object.entries(publish).reverse())
+  await act(async () => renderer.update(React.createElement(MaitianExport, { ...initial, draft: { ...initial.draft, publish: reordered } })))
+  await act(async () => settle({ downloadPath: '/normalized-result', warnings: [] }))
+  assert.equal(renderer.root.findByType('a').props.href, '/normalized-result')
 })
 
 test('英文界面翻译配置、登录预检和原页面动作，保留上游原始原因', async t => {

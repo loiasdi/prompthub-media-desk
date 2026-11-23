@@ -248,6 +248,25 @@ test('旧后端成功响应丢弃提示词时保留输入并报错，更新服�
   assert.equal(store.get(content).status, 'saved')
 })
 
+test('旧后端未保存浏览器发布方式时保留选择并提示更新服务', async () => {
+  const content = item()
+  let outdated = true
+  const store = createWorkspaceStore({ ...options, api: async (_path, body) => {
+    const workspace = fakeWorkspace(body.draft, body.revision + 1)
+    if (outdated) workspace.publish.provider = 'api'
+    return { workspace }
+  } })
+  store.update(content, { publish: { provider: 'maitian', mode: 'now' } })
+  await assert.rejects(store.flush(content.id), /服务端未完整保存发布方式/)
+  assert.equal(store.get(content).draft.publish.provider, 'maitian')
+  assert.equal(store.get(content).draft.publish.mode, 'now')
+  assert.equal(store.get(content).status, 'error')
+  outdated = false
+  await store.flush(content.id)
+  assert.equal(store.get(content).draft.publish.provider, 'maitian')
+  assert.equal(store.get(content).status, 'saved')
+})
+
 test('提示词保存遇到旧版截断或置空响应时也保留完整原文', async () => {
   for (const returned of [null, '', '全局视频参数：']) {
     const content = item()

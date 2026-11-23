@@ -19,23 +19,27 @@ test('离线验收所有执行器和扫描使用配置的 Node，配置不可用
   const config = new MaitianConfig(join(root, 'config'))
   const component = join(config.resolve().profileDir, 'Default', 'Extensions', STORE_ID, '1.0.0_0')
   await mkdir(join(component, 'lib'), { recursive: true })
-  // Synthetic two-platform contract only; this does not prove a real store installation.
+  // Synthetic seven-platform contract only; this does not prove a real store installation.
   await writeFile(join(component, 'manifest.json'), JSON.stringify({ name: 'Synthetic verifier contract', version: '1.0.0' }))
   await writeFile(join(component, 'lib/bundle.js'), `
     if (process.env.MEDIA_DESK_VERIFIER_RUNTIME !== 'configured') throw Error('Wrong runtime');
     export const PLATFORMS = {
+      bilibili: { name: 'B站', fields: { title: [1, 20], desc: [0, 1000] } },
       xhs: { name: '小红书', fields: { title: [1, 20], body: [1, 1000] } },
+      douyin: { name: '抖音', fields: { title: [1, 20], body: [0, 1000] } },
       channels: { name: '视频号', fields: { shortTitle: [1, 20], body: [1, 1000] } },
+      youtube: { name: 'YouTube', fields: { title: [1, 20], desc: [0, 1000] } },
+      x: { name: 'X', fields: { text: [1, 200] } },
+      instagram: { name: 'Instagram', fields: { caption: [1, 200] } },
     };
     export function validate(data, files) {
-      const [platform, fields] = Object.entries(data.platforms)[0];
-      const field = platform === 'xhs' ? 'title' : 'shortTitle';
-      return { errors: !files.has(data.video) || fields[field].length > 20 ? ['Synthetic rejection'] : [], warnings: [] };
+      const invalid = Object.entries(data.platforms).some(([platform, values]) => Object.entries(PLATFORMS[platform].fields).some(([field, [min, max]]) => typeof values[field] !== 'string' || values[field].length < min || values[field].length > max));
+      return { errors: !files.has(data.video) || invalid ? ['Synthetic rejection'] : [], warnings: [] };
     }
   `)
   await writeFile(join(component, 'lib/publish.js'), `
-    import { validate } from './bundle.js';
-    export const ADAPTERS = { xhs: {}, channels: {} };
+    import { validate, PLATFORMS } from './bundle.js';
+    export const ADAPTERS = Object.fromEntries(Object.keys(PLATFORMS).map(id => [id, {}]));
     export async function scanProjects(root) {
       const projects = [];
       for await (const [dir, handle] of root.entries()) {
@@ -77,13 +81,13 @@ test('离线验收所有执行器和扫描使用配置的 Node，配置不可用
   await exec(process.execPath, [verifier, '--installed-config-dir', config.root, '--output-dir', output], { timeout: 60_000, maxBuffer: 2_000_000 })
   const report = JSON.parse(await readFile(join(output, 'report.json'), 'utf8'))
   const processes = (await readFile(audit, 'utf8')).trim().split('\n').map(line => JSON.parse(line))
-  assert.equal(processes.length, 18)
-  assert.equal(new Set(processes.map(row => row.pid)).size, 18)
+  assert.equal(processes.length, 66)
+  assert.equal(new Set(processes.map(row => row.pid)).size, 66)
   assert.equal(processes.filter(row => row.argv.includes('--scan-exports')).length, 1)
-  assert.equal(report.distinctRunnerCount, 17)
-  assert.equal(report.operations.filter(op => op === 'validate').length, 12)
-  assert.equal(report.cases.length, 4)
-  assert.equal(report.originalScannerProjects.length, 4)
+  assert.equal(report.distinctRunnerCount, 65)
+  assert.equal(report.operations.filter(op => op === 'validate').length, 48)
+  assert.equal(report.cases.length, 16)
+  assert.equal(report.originalScannerProjects.length, 16)
   assert.equal(report.runtime.verifier.executable, process.execPath)
   assert.deepEqual(report.runtime.component, { executable: nodePath, node: process.version })
   assert.deepEqual(report.runtime.scanner, report.runtime.component)
@@ -99,5 +103,5 @@ test('离线验收所有执行器和扫描使用配置的 Node，配置不可用
   })
   assert.deepEqual(await readFile(config.file), invalid)
   await assert.rejects(readFile(join(root, 'failed-report', 'report.json')), { code: 'ENOENT' })
-  assert.equal((await readFile(audit, 'utf8')).trim().split('\n').length, 18)
+  assert.equal((await readFile(audit, 'utf8')).trim().split('\n').length, 66)
 })

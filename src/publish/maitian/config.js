@@ -6,7 +6,7 @@ import { dshHome } from '../../store.js'
 import { MaitianError } from './errors.js'
 
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value)
-const keys = new Set(['enabled', 'source', 'localComponentDir', 'exportComponentDir', 'chromePath', 'nodePath', 'profileId', 'port', 'fillTimeoutMinutes'])
+const keys = new Set(['enabled', 'source', 'localComponentDir', 'chromePath', 'nodePath', 'profileId', 'port', 'fillTimeoutMinutes'])
 export class MaitianConfig {
   constructor(root = join(dshHome(), 'media-desk-publishing', 'maitian')) {
     this.root = root
@@ -20,12 +20,13 @@ export class MaitianConfig {
       if (error.code !== 'ENOENT') throw new MaitianError('INVALID_CONFIG', '麦田配置无法读取，请检查本机配置文件')
       saved = {}
     }
-    return this.validate({ enabled: false, source: 'store', localComponentDir: '', exportComponentDir: '', chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', nodePath: '', profileId: 'default', port: 9333, fillTimeoutMinutes: 360, ...saved })
+    if (saved && typeof saved === 'object') delete saved.exportComponentDir
+    return this.validate({ enabled: false, source: 'store', localComponentDir: '', chromePath: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', nodePath: '', profileId: 'default', port: 9333, fillTimeoutMinutes: 360, ...saved })
   }
   validate(value) {
     if (!object(value) || Object.keys(value).some(key => !keys.has(key)) || typeof value.enabled !== 'boolean' || !['store', 'local'].includes(value.source) || !/^[a-zA-Z0-9_-]{1,60}$/.test(value.profileId) || !Number.isInteger(value.port) || value.port < 1024 || value.port > 65535) throw new MaitianError('INVALID_CONFIG', '麦田配置字段无效', 400)
     if (!Number.isInteger(value.fillTimeoutMinutes) || value.fillTimeoutMinutes < 1 || value.fillTimeoutMinutes > 1440) throw new MaitianError('INVALID_CONFIG', '填写保护时限须为 1 至 1440 分钟的整数', 400)
-    for (const key of ['localComponentDir', 'exportComponentDir', 'chromePath', 'nodePath']) {
+    for (const key of ['localComponentDir', 'chromePath', 'nodePath']) {
       if (typeof value[key] !== 'string' || value[key].length > 4096 || /[\x00-\x1f\x7f]/.test(value[key]) || value[key] && !isAbsolute(value[key])) throw new MaitianError('INVALID_CONFIG', '执行器和组件路径必须是绝对路径', 400)
     }
     if (value.source === 'local' && !value.localComponentDir) throw new MaitianError('INVALID_CONFIG', '本地模式需要原版组件目录', 400)
@@ -39,7 +40,7 @@ export class MaitianConfig {
     return {
       enabled: value.enabled, source: value.source, profileId: value.profileId, port: value.port,
       fillTimeoutMinutes: value.fillTimeoutMinutes,
-      chromeConfigured: Boolean(value.chromePath), nodeConfigured: Boolean(value.nodePath), localComponentConfigured: Boolean(value.localComponentDir), exportComponentConfigured: Boolean(value.exportComponentDir || value.localComponentDir),
+      chromeConfigured: Boolean(value.chromePath), nodeConfigured: Boolean(value.nodePath), localComponentConfigured: Boolean(value.localComponentDir),
       executionLocation: 'host-machine',
     }
   }

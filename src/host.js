@@ -31,6 +31,7 @@ import { ContentAssets, MEDIA_MIME } from './content-assets.js'
 import { Publishing } from './publish/service.js'
 import { PublishError } from './publish/errors.js'
 import { MaitianPublishing } from './publish/maitian/service.js'
+import { rememberExportLocation, rememberedExportLocation } from './publish/maitian/export.js'
 import { withLocalUploadSource } from './publish/local-source.js'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
@@ -316,11 +317,15 @@ export async function route(ctx, store, desk, req, res) {
     res.setHeader('cache-control', 'no-store')
     try {
       const maitian = path.startsWith('publish/maitian/') ? (desk.maitianPublishing ??= new MaitianPublishing(store)) : null
+      const maitianExportsRoot = async () => desk.settings
+        ? resolveExportDir((await desk.settings.read()).exportDir)
+        : join(maitian.config.root, 'exports')
       if (method === 'GET' && path === 'publish/maitian/config') return json(res, 200, maitian.public())
       if (method === 'GET' && path === 'publish/maitian/download') {
         const exportId = url.searchParams.get('exportId')
-        const archive = await maitian.archive(exportId)
-        return await withLocalUploadSource(maitian.config.root, archive.file, { filename: `${exportId}.tar.gz`, mime: 'application/gzip' }, async source => {
+        const exportsRoot = await rememberedExportLocation(maitian.config.root, exportId) || await maitianExportsRoot()
+        const archive = await maitian.archive(exportId, exportsRoot)
+        return await withLocalUploadSource(exportsRoot, archive.file, { filename: `maitian-${exportId}.tar.gz`, mime: 'application/gzip' }, async source => {
           res.statusCode = 200
           res.setHeader('content-type', 'application/gzip')
           res.setHeader('content-disposition', `attachment; filename="maitian-${exportId}.tar.gz"`)
@@ -353,8 +358,11 @@ export async function route(ctx, store, desk, req, res) {
         return json(res, 200, await maitian.browser(op, body))
       }
       if (path === 'publish/maitian/export') {
-        if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'confirmExisting'].includes(key))) return json(res, 400, { error: '工程导出字段无效' })
-        return json(res, 200, await maitian.export(body))
+        if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'platforms', 'confirmExisting'].includes(key))) return json(res, 400, { error: '工程导出字段无效' })
+        const exportsRoot = await maitianExportsRoot()
+        const result = await maitian.export(body, exportsRoot)
+        await rememberExportLocation(maitian.config.root, result.exportId, exportsRoot)
+        return json(res, 200, result)
       }
       if (path === 'publish/maitian/prepare') {
         if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'account'].includes(key))) return json(res, 400, { error: '浏览器准备字段无效' })

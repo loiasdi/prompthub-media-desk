@@ -2,6 +2,7 @@ import React from 'react'
 import { t } from './i18n.js'
 import { Dialog } from './ui.jsx'
 import { flushWorkspace, formatBytes, prepareMaitianPublish } from './workspace.js'
+import { MAPPED_PLATFORMS } from '../src/publish/maitian/platforms.js'
 
 const ID = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/
 const HASH = /^[a-f0-9]{64}$/
@@ -37,7 +38,8 @@ export function MaitianPrepare({ item, draft, assets, platform, config, prefligh
   const checkedAt = Date.parse(preflight?.checkedAt)
   const freshLogin = preflight?.ok === true && preflight.platform === platform && Number.isFinite(checkedAt) && checkedAt <= clock + 30_000 && clock - checkedAt < 300_000
   const supported = Boolean(platform && draft.publish.format === 'video' && ['now', 'scheduled'].includes(draft.publish.mode))
-  const canPrepare = !disabled && !locked && statusKnown && !item.sample && Boolean(draft.selectedVideo) && config?.enabled && config.implementation?.prepare === true && supported && freshLogin && label.trim() && accountChecked && identityChecked
+  const shortTitleReady = platform !== 'channels' || Boolean(draft.publish.browser?.shortTitle?.trim())
+  const canPrepare = !disabled && !locked && statusKnown && !item.sample && Boolean(draft.selectedVideo) && config?.enabled && config.implementation?.prepare === true && supported && shortTitleReady && freshLogin && label.trim() && accountChecked && identityChecked
   const close = () => { if (!disabled) { setConfirmation(null); setConsent(false) } }
   const prepare = () => {
     if (!canPrepare) return
@@ -74,6 +76,7 @@ export function MaitianPrepare({ item, draft, assets, platform, config, prefligh
     <p>{t('准备只固定文案和素材，不上传。确认开始后会上传到专用 Chrome，最终发布需由你在平台完成。')}</p>
     <p>{t('本项目当前成片上限为 250 MB，并非平台上限。')}</p>
     {!supported ? <p>{t('浏览器填写目前只接入小红书和视频号单篇视频。')}</p> : null}
+    {!shortTitleReady ? <p role="status">{t('填写视频号短标题后才能准备，麦田组件要求该字段非空。')}</p> : null}
     {locked ? <p role="status">{t('此平台已有投稿记录，请查看投稿记录。')}</p> : null}
     {!statusKnown ? <p role="status">{t('请先刷新投稿记录，确认当前防重状态。')}</p> : null}
     {!freshLogin ? <p>{t('请先检查平台登录；成功预检五分钟内有效，之后需重新预检并核对账号。')}</p> : null}
@@ -84,7 +87,7 @@ export function MaitianPrepare({ item, draft, assets, platform, config, prefligh
     {prepared ? <Dialog title={t('确认浏览器填写')} onClose={close} width={650}>
       <div className="md-form">
         <p>{t('准备只固定文案和素材，不上传。确认开始后会上传到专用 Chrome，最终发布需由你在平台完成。')}</p>
-        <p>{t('目标平台')}：{t(draft.publish.platform)} · {t('目标账号（用户确认）')}：{prepared.account.label}</p>
+        <p>{t('目标平台')}：{t(MAPPED_PLATFORMS[platform] || draft.publish.platform)} · {t('目标账号（用户确认）')}：{prepared.account.label}</p>
         <p>{t('浏览器资料')}：{prepared.profileId} · {t('组件版本')}：{prepared.engineVersion}</p>
         <dl style={{ overflowWrap: 'anywhere' }}><dt>{t('发布标题')}</dt><dd>{prepared.draft.title}</dd><dt>{t('发布正文')}</dt><dd style={{ whiteSpace: 'pre-wrap' }}>{prepared.draft.description}</dd><dt>{t('发布话题')}</dt><dd>{prepared.draft.tags}</dd></dl>
         {platform === 'channels' ? <p>{t('视频号短标题')}：{prepared.draft.shortTitle}</p> : null}
