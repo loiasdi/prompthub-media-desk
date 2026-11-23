@@ -15,6 +15,12 @@ const input = platform => ({
 })
 const row = (result, text) => result.checks.find(row => row.text === text)
 
+test('浏览器 now 不复用 API 准备条件，即使平台 API 参数齐全也不能调用 API 投稿', () => {
+  const props = input('bilibili')
+  assert.equal(publishReadiness(props).canPrepare, true)
+  assert.equal(publishReadiness({ ...props, publish: { ...props.publish, provider: 'maitian' } }).canPrepare, false)
+})
+
 test('Bluesky 发布入口：公开确认、文字与图文准备条件一致', () => {
   const props = input('bluesky')
   props.video = undefined

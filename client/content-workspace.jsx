@@ -5,6 +5,8 @@ import { preferredCoverRatio } from './cover.js'
 import { ArticleImagePicker, PublishAccount, PublishChecklist, PublishControls, PublishHistory, usePublishPreparation, usePublishing } from './publish.jsx'
 import { publishUsesArticleImages, publishUsesCover } from '../src/publish/capabilities.js'
 import { articleImageIds } from '../src/publish/article-images.js'
+import { MaitianExport } from './maitian-publish.jsx'
+import { PublishMethod, publishMethod } from './publish-method.jsx'
 import React from 'react'
 import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, startProgressToast, toast, useDesk } from './desk.js'
 import { t, useLang } from './i18n.js'
@@ -18,7 +20,7 @@ import { COVER_RATIOS, COVER_STYLES, coverReferenceImages } from '../src/cover-d
 
 const TYPES = [{ id: 'all', name: '全部素材', icon: 'folder' }, { id: 'video', name: '视频', icon: 'film' }, { id: 'image', name: '图片', icon: 'image' }, { id: 'audio', name: '音频', icon: 'play' }]
 const ROLE_NAMES = ASSET_ROLE_NAMES
-const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/aac,audio/ogg,.m4a'
+const ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm,video/quicktime,.m4v,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/aac,audio/ogg,.m4a'
 
 function mediaInfo(asset) {
   const parts = [formatBytes(asset.bytes)]
@@ -379,31 +381,38 @@ function AssetsPage({ item, draft, update, assets, persistence }) {
   </div>
 }
 
-function PublishPage({ item, draft, update, assets, onTab, syncPublish }) {
+export function PublishPage({ item, draft, update, assets, onTab, syncPublish }) {
   const publish = draft.publish
-  const publishing = usePublishing(item.id, publish.platform, publish.mode === 'now')
+  const method = publishMethod(publish)
+  const apiMode = method === 'api'
+  const browserMode = method === 'maitian'
+  const publishing = usePublishing(item.id, publish.platform, apiMode)
   const video = assets.find(a => a.id === draft.selectedVideo)
   const cover = assets.find(a => a.id === draft.selectedCover)
-  const articleImages = publishUsesArticleImages(publishing.platform, publish.format)
+  const articleImages = !browserMode && publishUsesArticleImages(publishing.platform, publish.format)
   const images = (articleImages ? articleImageIds(publish.description) : draft.imageIds).map(id => assets.find(a => a.id === id)).filter(Boolean)
   const patch = values => update(d => ({ publish: { ...d.publish, ...values } }))
   const flow = usePublishPreparation({ item, publishing, publish, video, cover, images })
-  const useCover = publish.format !== 'text' && (publish.mode !== 'now' || !publishing.platform || publishUsesCover(publishing.platform, publish.format))
+  const useCover = !browserMode && publish.format !== 'text' && (!apiMode || !publishing.platform || publishUsesCover(publishing.platform, publish.format))
+  const previewCover = browserMode ? assets.find(asset => asset.id === publish.browser?.covers?.['3x4']) : useCover ? cover : null
   const manualPackage = () => {
-    const selected = [...(publish.format === 'video' ? [video] : publish.format === 'images' || articleImages ? images : []), useCover && cover].filter(Boolean)
+    const covers = browserMode ? [...new Set(Object.values(publish.browser?.covers || {}))].map(id => assets.find(asset => asset.id === id)) : useCover ? [cover] : []
+    const selected = [...(publish.format === 'video' ? [video] : publish.format === 'images' || articleImages ? images : []), ...covers].filter(Boolean)
     const text = `# ${publish.title}\n\n${publish.description}\n\n${publish.tags}\n\n## ${t('发布素材')}\n\n${selected.map(a => `- ${a.name}`).join('\n')}\n\n${t('发布清单仅包含文案和文件名，请在素材页下载对应文件')}`
     downloadText(text, `${item.title}-publish.md`, 'text/markdown')
   }
   return <div className="md-production-page">
     <div className="md-production-heading"><div><h2>{t('发布')}</h2><p>{t('核对文案与素材，发布时使用同一个版本')}</p></div><button type="button" className="md-btn" onClick={manualPackage}><Icon name="save" size={15} />{t('导出发布清单')}</button></div>
-    <div className="md-publish-layout"><div className="md-publish-editor"><section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布到哪里')}</h3><span>{t('平台设置')}</span></div><div className="md-platform-options">{PLATFORMS.map(platform => <button type="button" key={platform} aria-pressed={publish.platform === platform} className={publish.platform === platform ? 'is-on' : ''} onClick={() => patch({ platform })}>{t(platform)}</button>)}</div><PublishAccount publishing={publishing} /></section>
+    <div className="md-publish-layout"><div className="md-publish-editor"><section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布到哪里')}</h3><span>{t('平台设置')}</span></div><div className="md-platform-options">{PLATFORMS.map(platform => <button type="button" key={platform} aria-pressed={publish.platform === platform} className={publish.platform === platform ? 'is-on' : ''} onClick={() => patch({ platform })}>{t(platform)}</button>)}</div>{browserMode ? <p>{t('浏览器账号在下方麦田配置中登录和人工核对。')}</p> : <PublishAccount publishing={publishing} />}</section>
       <section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布内容')}</h3><Segmented label={t('发布类型')} value={publish.format} onChange={format => patch({ format })} options={[{ value: 'video', label: t('视频') }, { value: 'images', label: t('图文') }, { value: 'text', label: t('纯文字') }, { value: 'article', label: t('文章') }]} /></div>{draft.publishChanges.length ? <div className="md-publish-source-notice" role="status"><p>{t('稿件或平台已更新，已保留你编辑的发布内容')}</p><button type="button" className="md-btn is-small" onClick={syncPublish}>{t('同步变化字段')}</button></div> : null}<Field label="发布标题"><input value={publish.title} onChange={e => patch({ title: e.target.value })} /><small>{t('{n} 个字符', { n: [...publish.title].length })}</small></Field><Field label="正文 / 简介"><textarea rows={6} value={publish.description} placeholder={t('写下这一版要发布的正文')} onChange={e => patch({ description: e.target.value })} /></Field><Field label="话题"><input value={publish.tags} placeholder={t('#话题一 #话题二')} onChange={e => patch({ tags: e.target.value })} /></Field><div className="md-publish-media-select">{publish.format === 'video' ? <Field label="发布视频"><select value={draft.selectedVideo} onChange={e => update({ selectedVideo: e.target.value })}><option value="">{t('选择一个完整成片')}</option>{assets.filter(a => a.type === 'video').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : publish.format === 'images' ? <div className="md-publish-images"><span>{t('发布图片（按选择顺序）')}</span>{assets.filter(a => a.type === 'image').map(a => <label key={a.id}><input type="checkbox" checked={draft.imageIds.includes(a.id)} onChange={e => update(d => ({ imageIds: e.target.checked ? [...d.imageIds, a.id] : d.imageIds.filter(id => id !== a.id) }))} /><span>{draft.imageIds.includes(a.id) ? `${draft.imageIds.indexOf(a.id) + 1}. ` : ''}{a.name}</span></label>)}</div> : null}{useCover ? <Field label="发布封面"><select value={draft.selectedCover} onChange={e => update({ selectedCover: e.target.value })}><option value="">{t('选择封面图片')}</option>{assets.filter(a => a.type === 'image').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : null}</div></section>
       {articleImages ? <ArticleImagePicker assets={assets} onInsert={marker => patch({ description: `${publish.description.trimEnd()}\n\n${marker}\n\n` })} /> : null}
-      <section className="md-work-panel"><div className="md-work-panel-title"><h3>{t('发布方式')}</h3></div><div className="md-publish-modes">{[{ id: 'manual', name: '手动发布', desc: '复制文案，下载选定素材' }, { id: 'now', name: 'API 投稿', desc: '核对信息后确认投稿' }].map(mode => <label key={mode.id} className={publish.mode === mode.id ? 'is-on' : ''}><input type="radio" name={`publish-mode-${item.id}`} value={mode.id} checked={publish.mode === mode.id} onChange={() => patch({ mode: mode.id })} /><div><strong>{t(mode.name)}</strong><span>{t(mode.desc)}</span></div></label>)}</div>{publish.mode === 'scheduled' ? <p className="md-publish-pending">{t('原定时设置不会自动执行，请选择发布方式。')}</p> : null}{publish.mode === 'now' && !publishing.configured && publishing.known ? <p className="md-publish-pending">{t('这个平台当前不能 API 投稿，可切回手动发布。')}</p> : null}</section>
-      {publish.mode === 'now' ? <PublishControls publishing={publishing} flow={flow} /> : null}
+      <PublishMethod id={item.id} publish={publish} patch={patch} />
+      {apiMode && !publishing.configured && publishing.known ? <p className="md-publish-pending">{t('这个平台当前不能 API 投稿，可切回手动发布。')}</p> : null}
+      {apiMode ? <PublishControls publishing={publishing} flow={flow} /> : null}
+      <MaitianExport item={item} draft={draft} update={update} assets={assets} publishing={publishing} />
       <PublishHistory id={item.id} publishing={publishing} />
-    </div><aside className="md-publish-review"><section className="md-work-panel md-publish-preview"><div className="md-work-panel-title"><h3>{t('发布预览')}</h3><span>{t(publish.platform)}</span></div><div className="md-release-preview">{['text', 'article'].includes(publish.format) ? publish.format === 'article' && cover ? <img src={cover.src} alt={t('发布封面')} /> : <Icon name="pen" size={36} /> : publish.format === 'images' ? images[0] ? <img src={images[0].src} alt={t('发布图片')} /> : <Icon name="image" size={36} /> : useCover && cover ? <img src={cover.src} alt={t('发布封面')} /> : video ? <video src={video.src} poster={video.poster} preload="metadata" muted /> : <Icon name="film" size={36} />}{publish.format === 'video' ? <span className="md-release-type"><Icon name="play" size={13} fill />{t('视频')}</span> : ['text', 'article'].includes(publish.format) ? <span className="md-release-type">{t(publish.format === 'article' ? '文章' : '纯文字')}</span> : <span className="md-release-type">{images.length} {t('张图')}</span>}</div><h4>{publish.title || t('还没有标题')}</h4><p>{publish.description || t('还没有正文')}</p><button type="button" className="md-inline-link" onClick={() => onTab('assets')}>{t('去素材页检查文件')}<Icon name="chevR" size={12} /></button></section>
-      <PublishChecklist mode={publish.mode} locked={publishing.locked} flow={flow} onCopy={() => copy(`${publish.title}\n\n${publish.description}\n\n${publish.tags}`)} />
+    </div><aside className="md-publish-review"><section className="md-work-panel md-publish-preview"><div className="md-work-panel-title"><h3>{t('发布预览')}</h3><span>{t(publish.platform)}</span></div><div className="md-release-preview">{['text', 'article'].includes(publish.format) ? publish.format === 'article' && cover ? <img src={cover.src} alt={t('发布封面')} /> : <Icon name="pen" size={36} /> : publish.format === 'images' ? images[0] ? <img src={images[0].src} alt={t('发布图片')} /> : <Icon name="image" size={36} /> : previewCover ? <img src={previewCover.src} alt={t('发布封面')} /> : video ? <video src={video.src} poster={video.poster} preload="metadata" muted /> : <Icon name="film" size={36} />}{publish.format === 'video' ? <span className="md-release-type"><Icon name="play" size={13} fill />{t('视频')}</span> : ['text', 'article'].includes(publish.format) ? <span className="md-release-type">{t(publish.format === 'article' ? '文章' : '纯文字')}</span> : <span className="md-release-type">{images.length} {t('张图')}</span>}</div><h4>{publish.title || t('还没有标题')}</h4><p>{publish.description || t('还没有正文')}</p><button type="button" className="md-inline-link" onClick={() => onTab('assets')}>{t('去素材页检查文件')}<Icon name="chevR" size={12} /></button></section>
+      <PublishChecklist mode={browserMode ? 'browser' : publish.mode} locked={publishing.locked} flow={flow} onCopy={() => copy(`${publish.title}\n\n${publish.description}\n\n${publish.tags}`)} />
     </aside></div>
   </div>
 }

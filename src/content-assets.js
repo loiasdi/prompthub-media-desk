@@ -23,7 +23,7 @@ export function assetSignature(header, ext) {
   if (ext === '.gif') return ['GIF87a', 'GIF89a'].includes(ascii(0, 6))
   if (ext === '.webp') return ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WEBP'
   if (ext === '.wav') return ascii(0, 4) === 'RIFF' && ascii(8, 12) === 'WAVE'
-  if (['.mp4', '.m4a', '.mov'].includes(ext)) return ascii(4, 8) === 'ftyp' || (ext === '.mov' && ['moov', 'mdat', 'wide'].includes(ascii(4, 8)))
+  if (['.mp4', '.m4v', '.m4a', '.mov'].includes(ext)) return ascii(4, 8) === 'ftyp' || (ext === '.mov' && ['moov', 'mdat', 'wide'].includes(ascii(4, 8)))
   if (ext === '.webm') return header.subarray(0, 4).equals(Buffer.from('1a45dfa3', 'hex'))
   if (ext === '.ogg') return ascii(0, 4) === 'OggS'
   if (ext === '.mp3') return ascii(0, 3) === 'ID3' || (header[0] === 255 && (header[1] & 0xe0) === 0xe0)

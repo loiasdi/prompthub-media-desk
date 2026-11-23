@@ -16,6 +16,7 @@ import { createInstagramAdapter } from '../src/publish/instagram/index.js'
 import { PublishError } from '../src/publish/errors.js'
 import { configuredPlatform } from '../src/publish/platforms.js'
 import { Publishing } from '../src/publish/service.js'
+import { migratePublishRecords } from '../src/publish/records.js'
 import { createYouTubeAdapter } from '../src/publish/youtube/index.js'
 import { relocateStorage } from '../src/storage-management.js'
 import { Store } from '../src/store.js'
@@ -185,6 +186,48 @@ for (const platform of ['youtube', 'bilibili']) {
     assert.ok(disk.includes('submissionStarted'))
   })
 }
+
+for (const platform of ['youtube', 'bilibili']) {
+  test(`记录升级 v2 后 ${platform} 仍正常准备、执行及回查，不重投旧任务`, async t => {
+    const { root, store, input } = await fixture(t, platform)
+    await store.run(() => migratePublishRecords(root))
+    const { resolvePlatform, paths } = fake(platform)
+    const publishing = new Publishing(store, { resolvePlatform, snapshotRoot: root })
+    const prepared = await publishing.prepare(input)
+    const payload = { id, taskId: prepared.taskId, confirmed: true }
+    assert.equal((await publishing.start(payload)).status, 'publishing')
+    assert.equal((await jobFinished(publishing)).status, 'pending_review')
+    assert.equal((await publishing.review(payload)).status, 'published')
+    const disk = JSON.parse(await readFile(join(root, '.publish-records.json'), 'utf8'))
+    assert.equal(disk.version, 2)
+    assert.equal(disk.records[0].provider, 'api')
+    const restarted = new Publishing(new Store(root), { resolvePlatform })
+    assert.equal((await restarted.start(payload)).taskId, prepared.taskId)
+    assert.equal(paths.filter(path => path === (platform === 'youtube' ? 'PUT /upload/youtube/v3/videos' : 'POST /arcopen/fn/archive/add-by-utoken')).length, 1)
+  })
+}
+
+test('API 准备仍在读取账号、尚无记录时，不能跨 Host 迁移目录或升级记录', { timeout: 10_000 }, async t => {
+  const { root, store, input } = await fixture(t)
+  let entered, release
+  const accountRead = new Promise(resolve => { entered = resolve })
+  const gate = new Promise(resolve => { release = resolve })
+  const { resolvePlatform } = fake('youtube', { 'GET /youtube/v3/channels': async () => {
+    entered(); await gate
+    return Response.json({ items: [{ id: 'channel-a', snippet: { title: '测试频道' } }] })
+  } })
+  const publishing = new Publishing(store, { resolvePlatform })
+  const pending = publishing.prepare(input)
+  try {
+    await accountRead
+    await assert.rejects(readFile(join(root, '.publish-records.json')), { code: 'ENOENT' })
+    const other = new Store(root)
+    await assert.rejects(other.run(() => migratePublishRecords(root)), /发布操作正在进行/)
+    await assert.rejects(relocateStorage(other, root + '-moved', { env: { DSH_HOME: root + '-config' } }), /发布操作正在进行/)
+  } finally { release(); await pending }
+  await store.run(() => migratePublishRecords(root))
+  assert.equal(JSON.parse(await readFile(join(root, '.publish-records.json'))).version, 2)
+})
 
 test('YouTube Host 缩略图专用上限：允许超过通用 10 MiB 的本地图片，拒绝超过 50 MB', async t => {
   const { root, store, input, assets } = await fixture(t)

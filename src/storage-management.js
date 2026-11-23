@@ -4,7 +4,11 @@ import { createHash, randomUUID } from 'node:crypto'
 import { dirname, basename, join, resolve, isAbsolute, relative, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { Settings } from './settings.js'
-import { activeRecord, readPublishRecords } from './publish/records.js'
+import { Store } from './store.js'
+import { blocksStorageSwitch, providerOf, readPublishRecords, writePublishRecords } from './publish/records.js'
+import { assertNoPublishActivities } from './publish/activity.js'
+import { TaskSnapshotStorage } from './publish/maitian/snapshot-storage.js'
+import { prepareWorkspaceSnapshotTransfer } from './publish/maitian/snapshot-ownership.js'
 import { assertNoAssetUploads } from './asset-upload.js'
 import { tr } from './i18n.js'
 
@@ -24,7 +28,8 @@ async function checkSwitch(source, target, configHome) {
   if (inside(source, target) || inside(target, source)) throw fail('新旧文档目录不能互相包含，请选择独立文件夹')
   const appHome = await realpath(configHome).catch(missing) ?? resolve(configHome)
   if (inside(target, appHome)) throw fail('文档目录不能包含应用配置目录')
-  if ((await readPublishRecords(source)).some(activeRecord)) throw Object.assign(new Error(tr('有投稿任务正在进行，请完成后再更换目录')), { status: 409 })
+  if ((await readPublishRecords(source)).some(blocksStorageSwitch)) throw Object.assign(new Error(tr('有投稿任务正在进行，请完成后再更换目录')), { status: 409 })
+  await assertNoPublishActivities(source)
 }
 
 async function activate(store, configHome, root, markdown = store.markdown) {
@@ -89,9 +94,10 @@ async function verify(source, target, isRoot = true) {
 }
 
 // 旧目录保留为备份；所有文件校验完毕后才更新全局配置并切换。
-export async function relocateStorage(store, input, { env = process.env, settingsPatch } = {}) {
+export async function relocateStorage(store, input, { env = process.env, settingsPatch, snapshots = new TaskSnapshotStorage(join(configHomeOf(env), 'media-desk-publishing', 'maitian')) } = {}) {
   const requested = requestedPath(input, env)
-  return store.run(async () => {
+  // Allocation/archive use snapshot lock -> Store lock. Migration must use the same order.
+  return snapshots.withLock(() => store.run(async () => {
     await store.refresh()
     const source = await realpath(store.root)
     await mkdir(dirname(requested), { recursive: true })
@@ -100,6 +106,8 @@ export async function relocateStorage(store, input, { env = process.env, setting
     await assertNoAssetUploads(source)
     const configHome = configHomeOf(env)
     await checkSwitch(source, target, configHome)
+    const records = await readPublishRecords(source)
+    const transferSnapshots = await prepareWorkspaceSnapshotTransfer(snapshots.root, source, records)
     const existing = await readdir(target).catch(err => { if (err.code !== 'ENOENT') throw err; return [] })
     if (existing.length) throw fail('目标目录不是空目录，请选择一个新的或空的文件夹')
     const staging = await mkdtemp(join(dirname(target), `.${basename(target)}-迁移-`))
@@ -116,11 +124,32 @@ export async function relocateStorage(store, input, { env = process.env, setting
       if (settingsPatch) await new Settings(staging).update(settingsPatch)
       await rename(staging, target)
       published = true
-      await activate(store, configHome, target)
+      const destination = new Store(target, { markdown: store.markdown })
+      destination.followLocation = false
+      await destination.run(async () => {
+        await assertNoAssetUploads(target)
+        await assertNoPublishActivities(target)
+        const copied = await readPublishRecords(target)
+        if (JSON.stringify(copied) !== JSON.stringify(records)) throw fail('迁移目标的发布记录已变化，请保留两个目录并重新核对')
+        const transfer = { id: randomUUID(), at: new Date().toISOString() }
+        // Source stays an exact backup. Only the new workspace invalidates old preparations.
+        for (const record of copied) {
+          if (providerOf(record) !== 'maitian' || record.status !== 'prepared') continue
+          record.expiresAt = 0
+          record.workspaceRelocation = { ...transfer, preparationInvalidated: true }
+          record.message = '工作台目录已迁移，请重新检查并准备浏览器填写'
+        }
+        if (copied.some(row => row.workspaceRelocation?.id === transfer.id)) await writePublishRecords(target, copied)
+        await transferSnapshots(target, transfer)
+        // Ownership commits first. If activation is interrupted, opening the verified
+        // destination resumes management; the old backup cannot take its snapshots back.
+        try { await activate(store, configHome, target) }
+        catch { throw Object.assign(new Error(tr('数据已迁移，目录配置切换未完成；请使用“打开已有工作台”打开目标目录')), { status: 500 }) }
+      })
       await store.refresh()
       return { root: target, moved: true, backupRoot: source }
     } finally {
       if (!published) await rm(staging, { recursive: true, force: true })
     }
-  })
+  }))
 }

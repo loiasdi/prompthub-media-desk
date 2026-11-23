@@ -51,7 +51,7 @@ export function publishAccountIssue({ platform, configured, known, statusError, 
 
 export function publishReadiness({ itemId, publish, video, cover, images, publishing, fields }) {
   const title = publish.title.trim()
-  if (publish.mode !== 'now') return {
+  if (publish.mode !== 'now' || publish.provider === 'maitian') return {
     checks: [
       check('发布标题', title),
       ...(['text', 'article'].includes(publish.format) ? [] : [publish.format === 'video' ? check('发布视频', video) : check('发布图片', images.length)]),

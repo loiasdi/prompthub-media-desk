@@ -9,22 +9,32 @@ import { withLocalUploadSource } from './local-source.js'
 import { PUBLISH_PLATFORMS, publishFormats, publishSelectionIssue, publishUsesArticleImages, publishUsesCover } from './capabilities.js'
 import { articleImageIds, articleImageSyntaxIssue } from './article-images.js'
 import { accountOf, canReviewPlatform, categoriesOf, categoryTitleOf, platformDraft } from './platforms.js'
-import { activeRecord, readPublishRecords, visibleRecord, writePublishRecords } from './records.js'
+import { activeRecord, blocksDuplicate, providerOf, readPublishRecords, visibleRecord, writePublishRecords } from './records.js'
+import { withPublishActivity } from './activity.js'
+import { browserRecordView } from './maitian/task-record.js'
+import { recoverBrowserRecords } from './maitian/tasks.js'
 import { assetSummary, inspectSelection } from './snapshot.js'
 import { PublishConfig } from './config.js'
+import { apiRecordDigest, interruptedApiRecord, recoverApiTask } from './api-recovery.js'
 
 const PREPARED_MS = 15 * 60_000
 const EXECUTE_MS = 45 * 60_000
-const blocked = new Set(['publishing', 'pending_review', 'unknown', 'published'])
 const idPattern = /^[\w-]{1,160}$/
 const taskPattern = /^[a-f0-9-]{36}$/
-const canReview = job => Boolean(job?.receiptId && ['pending_review', 'unknown', 'published'].includes(job.status) && canReviewPlatform(job))
-const exposed = record => record && {
-  taskId: record.taskId, platform: record.platform, status: record.status, startedAt: record.startedAt, updatedAt: record.updatedAt,
-  receiptId: record.receiptId, canReview: canReview(record), url: record.url, actualPrivacy: record.actualPrivacy, message: record.message, reviewError: record.reviewError,
-  ...(record.coverResult && { coverResult: record.coverResult }),
-  ...(record.plan.draft.destination && { destination: record.plan.draft.destination }),
-  title: record.plan.draft.title, account: record.plan.account.name,
+const canReview = job => Boolean(providerOf(job) === 'api' && job?.receiptId && ['pending_review', 'unknown', 'published'].includes(job.status) && canReviewPlatform(job))
+const exposed = original => {
+  if (!original) return original
+  if (providerOf(original) === 'maitian') return browserRecordView(original)
+  const record = visibleRecord(original), interrupted = interruptedApiRecord(original)
+  return {
+    taskId: record.taskId, platform: record.platform, status: record.status, startedAt: record.startedAt, updatedAt: record.updatedAt,
+    receiptId: record.receiptId, canReview: canReview(record), url: record.url, actualPrivacy: record.actualPrivacy, message: record.message, reviewError: record.reviewError,
+    ...(record.coverResult && { coverResult: record.coverResult }),
+    ...(record.plan?.draft?.destination && { destination: record.plan.draft.destination }),
+    title: record.plan?.draft?.title || '', account: record.plan?.account?.name || '',
+    ...(interrupted && { canRecoverInterrupted: true, recoveryRecordDigest: apiRecordDigest(original) }),
+    ...(record.interruptionRecovery && { interruptionRecovery: { at: record.interruptionRecovery.at, actor: record.interruptionRecovery.actor } }),
+  }
 }
 const failureMessage = (err, fallback) => err instanceof PublishError || (err.status >= 400 && err.status < 500) ? err.message : fallback
 
@@ -59,17 +69,27 @@ export class Publishing {
   }
 
   async status(id) {
-    return this.locked(records => {
+    return this.locked(async (records, root) => {
       const item = this.item(id)
+      if (await recoverBrowserRecords(records)) await writePublishRecords(root, records)
       const platforms = Object.fromEntries(Object.keys(PUBLISH_PLATFORMS).map(key => [key, !item.sample && !item.trashedAt && Boolean(this.platform(key, false))]))
-      const jobs = records.filter(record => record.itemId === id && record.status !== 'prepared').slice(-20).reverse().map(record => exposed(visibleRecord(record)))
+      const jobs = records.filter(record => record.itemId === id && record.status !== 'prepared').slice(-20).reverse().map(exposed)
       // Do not omit an older blocking record just because the visible history is bounded.
-      const lockedPlatforms = Object.fromEntries(Object.keys(PUBLISH_PLATFORMS).map(key => [key, records.some(record => record.itemId === id && record.platform === key && blocked.has(record.status))]))
+      const keys = [...Object.keys(PUBLISH_PLATFORMS), 'xhs', 'channels']
+      const lockedPlatforms = Object.fromEntries(keys.map(key => [key, records.some(record => record.itemId === id && record.platform === key && blocksDuplicate(record))]))
       return { platforms, jobs, lockedPlatforms }
     })
   }
 
   async options(platform) {
+    return withPublishActivity(this.store, 'api-options', () => this.optionsNow(platform))
+  }
+
+  async recoverInterrupted(request) { return exposed(await recoverApiTask(this.store, request)) }
+  async interruptionOverview() {
+    return this.locked(records => ({ jobs: records.filter(row => providerOf(row) === 'api' && row.status === 'publishing').map(row => ({ ...exposed(row), itemId: row.itemId })) }))
+  }
+  async optionsNow(platform) {
     const config = this.platform(platform)
     const account = await accountOf(platform, config)
     return { account: account.name, categories: await categoriesOf(platform, config), ...(account.constraints && { constraints: account.constraints }) }
@@ -82,7 +102,7 @@ export class Publishing {
     const copy = { ...ws.publish }
     const base = sourceCopy(item)
     for (const key of ['title', 'description', 'platform', 'tags']) if (!ws.publishEdited?.[key]) copy[key] = base[key]
-    if (copy.platform !== PUBLISH_PLATFORMS[platform].name || !publishFormats(platform).includes(copy.format) || copy.mode !== 'now') throw fail(publishSelectionIssue(platform))
+    if (copy.provider === 'maitian' || copy.platform !== PUBLISH_PLATFORMS[platform].name || !publishFormats(platform).includes(copy.format) || copy.mode !== 'now') throw fail(publishSelectionIssue(platform))
     const draft = platformDraft(platform, copy, options)
     const video = copy.format === 'video' ? await inspectSelection(root, item.id, ws, ws.selectedVideo, 'video', snapshotDir) : undefined
     const images = []
@@ -104,20 +124,23 @@ export class Publishing {
   }
 
   async prepare({ id, revision, platform, options } = {}) {
+    return withPublishActivity(this.store, 'api-prepare', () => this.prepareNow({ id, revision, platform, options }))
+  }
+  async prepareNow({ id, revision, platform, options }) {
     const config = this.platform(platform)
     await this.locked(records => {
       const item = this.item(id)
       if (item.sample || item.trashedAt) throw fail('示例和回收站内容不能投稿')
-      if (records.some(record => record.itemId === id && record.platform === platform && blocked.has(record.status))) throw fail('此稿件已有该平台的投稿记录，请先查看结果', 409)
+      if (records.some(record => record.itemId === id && record.platform === platform && blocksDuplicate(record))) throw fail('此稿件已有该平台的投稿记录，请先查看结果', 409)
     })
     const account = await accountOf(platform, config)
     const categoryTitle = await categoryTitleOf(platform, config, options?.categoryId)
     return this.locked(async (records, root) => {
-      if (records.some(record => record.itemId === id && record.platform === platform && blocked.has(record.status))) throw fail('此稿件已有该平台的投稿记录，请先查看结果', 409)
+      if (records.some(record => record.itemId === id && record.platform === platform && blocksDuplicate(record))) throw fail('此稿件已有该平台的投稿记录，请先查看结果', 409)
       const { plan } = await this.plan(root, this.item(id), revision, platform, config.adapter, options, account, categoryTitle)
       const taskId = randomUUID()
       const expiresAt = Date.now() + PREPARED_MS
-      const keep = records.filter(record => record.status !== 'prepared' || (record.expiresAt > Date.now() && (record.itemId !== id || record.platform !== platform)))
+      const keep = records.filter(record => providerOf(record) !== 'api' || record.status !== 'prepared' || (record.expiresAt > Date.now() && (record.itemId !== id || record.platform !== platform)))
       await writePublishRecords(root, [...keep, { itemId: id, platform, taskId, status: 'prepared', expiresAt, plan }])
       const { id: _accountId, ...publicAccount } = plan.account
       return { taskId, expiresAt, ...plan, account: publicAccount }
@@ -125,14 +148,17 @@ export class Publishing {
   }
 
   async start({ id, taskId, confirmed } = {}) {
+    return withPublishActivity(this.store, 'api-start', () => this.startNow({ id, taskId, confirmed }))
+  }
+  async startNow({ id, taskId, confirmed }) {
     if (confirmed !== true || typeof taskId !== 'string' || !taskPattern.test(taskId)) throw fail('须明确确认当前投稿单')
     const find = records => {
-      const record = records.find(row => row.itemId === id && row.taskId === taskId)
+      const record = records.find(row => providerOf(row) === 'api' && row.itemId === id && row.taskId === taskId)
       if (!record) throw fail('投稿单不存在或已被替换，请重新检查', 409)
       return record
     }
     const checked = await this.locked(records => find(records))
-    if (checked.status !== 'prepared') return exposed(visibleRecord(checked))
+    if (checked.status !== 'prepared') return exposed(checked)
     if (checked.expiresAt <= Date.now()) throw fail('投稿单已过期，请重新检查', 409)
     const platform = checked.platform
     const config = this.platform(platform)
@@ -143,8 +169,8 @@ export class Publishing {
     try {
       claim = await this.locked(async (records, root) => {
         const record = find(records)
-        if (record.status !== 'prepared') return { existing: exposed(visibleRecord(record)) }
-        if (record.expiresAt <= Date.now() || records.some(row => row !== record && row.itemId === id && row.platform === platform && blocked.has(row.status))) throw fail('投稿单已过期或已有尝试，请重新检查', 409)
+        if (record.status !== 'prepared') return { existing: exposed(record) }
+        if (record.expiresAt <= Date.now() || records.some(row => row !== record && row.itemId === id && row.platform === platform && blocksDuplicate(row))) throw fail('投稿单已过期或已有尝试，请重新检查', 409)
         dir = await mkdtemp(join(this.snapshotRoot, 'media-desk-publish-'))
         const { draft, revision } = record.plan
         const next = await this.plan(root, this.item(id), revision, platform, config.adapter, { ...draft, categoryId: String(draft.categoryId) }, account, categoryTitle, dir)
@@ -168,7 +194,7 @@ export class Publishing {
   async updateClaim(taskId, mutate) {
     return this.locked(async (records, root) => {
       const record = records.find(row => row.taskId === taskId)
-      if (!record || record.status !== 'publishing') throw fail('投稿任务状态已改变', 409)
+      if (!record || providerOf(record) !== 'api' || record.status !== 'publishing') throw fail('投稿任务状态已改变', 409)
       mutate(record)
       record.updatedAt = new Date().toISOString()
       await writePublishRecords(root, records)
@@ -176,6 +202,10 @@ export class Publishing {
   }
 
   async execute({ record, video, cover, images = [] }, { adapter, accessToken }, dir) {
+    try { return await withPublishActivity(this.store, 'api-execute', () => this.executeNow({ record, video, cover, images }, { adapter, accessToken }, dir)) }
+    finally { await rm(dir, { recursive: true, force: true }).catch(() => {}) }
+  }
+  async executeNow({ record, video, cover, images }, { adapter, accessToken }, dir) {
     const signal = AbortSignal.timeout(Math.max(1, record.deadline - Date.now()))
     let checkpoint = false
     try {
@@ -210,11 +240,14 @@ export class Publishing {
         status: unknown ? 'unknown' : 'failed',
         message: failureMessage(err, unknown ? '无法确认投稿结果，请先在平台创作中心核对。' : '投稿未完成，请检查素材与账号再试。'),
       })).catch(() => {})
-    } finally { await rm(dir, { recursive: true, force: true }).catch(() => {}) }
+    }
   }
 
   async review({ id, taskId } = {}) {
-    const job = await this.locked(records => records.find(row => row.itemId === id && row.taskId === taskId))
+    return withPublishActivity(this.store, 'api-review', () => this.reviewNow({ id, taskId }))
+  }
+  async reviewNow({ id, taskId }) {
+    const job = await this.locked(records => records.find(row => providerOf(row) === 'api' && row.itemId === id && row.taskId === taskId))
     if (!job || !canReview(visibleRecord(job))) throw fail('此投稿不能在线回查，请在平台创作中心核对', 409)
     let result, error
     try {
@@ -224,9 +257,9 @@ export class Publishing {
       result = await config.adapter.review({ accessToken: config.accessToken, channelId: account.id, receiptId: job.receiptId, workId: job.workId, mediaIds: job.mediaIds, format: job.plan.draft.format, destination: job.plan.draft.destination, privacyStatus: job.plan.draft.privacyStatus, images: job.plan.images })
     } catch (err) { error = failureMessage(err, '本次回查未成功，请稍后再试') }
     return this.locked(async (records, root) => {
-      const record = records.find(row => row.taskId === taskId && row.itemId === id)
+      const record = records.find(row => providerOf(row) === 'api' && row.taskId === taskId && row.itemId === id)
       if (!record) throw fail('找不到投稿记录', 404)
-      if (record.reviewVersion !== job.reviewVersion || record.status !== job.status) return exposed(visibleRecord(record))
+      if (record.reviewVersion !== job.reviewVersion || record.status !== job.status) return exposed(record)
       record.reviewVersion = (record.reviewVersion || 0) + 1
       record.updatedAt = new Date().toISOString()
       record.reviewError = error
@@ -239,7 +272,7 @@ export class Publishing {
         record.message = undefined
       }
       await writePublishRecords(root, records)
-      return exposed(visibleRecord(record))
+      return exposed(record)
     })
   }
 }

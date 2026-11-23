@@ -26,7 +26,7 @@ export function createWorkspaceDraft(item) {
     imageIds: [], segments: item.sample ? segmentsFromShots(item) : [],
     ideaText: null, outlineText: '', promptText: null, coverPromptText: null, coverDesign: emptyCoverDesign(item.production?.title || item.title),
     promptSettings: { model: 'general', ratio: '9:16', duration: '30', style: '', referenceIds: [] },
-    publish: { ...publishSource(item), format: 'video', mode: 'manual', when: '', visibility: 'public' },
+    publish: { ...publishSource(item), format: 'video', mode: 'manual', provider: 'api', timezone: 'Asia/Shanghai', browser: { profileId: 'default', covers: {}, shortTitle: '' }, when: '', visibility: 'public' },
     publishEdited: {}, publishSource: publishSource(item),
   }
 }
@@ -109,6 +109,8 @@ export const importWorkspaceFiles = (id, files, folder) => workspaceStore.import
 export const recycleWorkspaceAsset = (id, assetId, restore) => workspaceStore.recycle(id, assetId, restore)
 export const runCoverAction = (item, path, body) => workspaceStore.action(item.id, path, body)
 export const prepareWorkspacePublish = (id, platform, options) => workspaceStore.action(id, 'publish/prepare', { platform, options })
+export const exportMaitianProject = (id, platform, confirmExisting) => workspaceStore.action(id, 'publish/maitian/export', { platform, confirmExisting })
+export const prepareMaitianPublish = (id, platform, account) => workspaceStore.action(id, 'publish/maitian/prepare', { platform, account })
 export const cancelWorkspaceImport = id => workspaceStore.cancelImport(id)
 
 export function useWorkspace(item) {

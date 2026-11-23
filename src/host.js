@@ -30,11 +30,14 @@ import { localizeSamples, samplesNeedLocale } from './seed.js'
 import { ContentAssets, MEDIA_MIME } from './content-assets.js'
 import { Publishing } from './publish/service.js'
 import { PublishError } from './publish/errors.js'
+import { MaitianPublishing } from './publish/maitian/service.js'
+import { withLocalUploadSource } from './publish/local-source.js'
 
 const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets')
 const MAX_JSON = 4_000_000
 const MIME = MEDIA_MIME
 const UPLOAD_EXT = Object.fromEntries(Object.entries(MIME).filter(([ext, type]) => ext !== '.jpeg' && !type.startsWith('audio/')).map(([ext, type]) => [type, ext]))
+UPLOAD_EXT['video/mp4'] = '.mp4'
 
 function json(res, status, body) {
   res.statusCode = status
@@ -312,8 +315,23 @@ export async function route(ctx, store, desk, req, res) {
     const publishing = desk.publishing ??= new Publishing(store)
     res.setHeader('cache-control', 'no-store')
     try {
+      const maitian = path.startsWith('publish/maitian/') ? (desk.maitianPublishing ??= new MaitianPublishing(store)) : null
+      if (method === 'GET' && path === 'publish/maitian/config') return json(res, 200, maitian.public())
+      if (method === 'GET' && path === 'publish/maitian/download') {
+        const exportId = url.searchParams.get('exportId')
+        const archive = await maitian.archive(exportId)
+        return await withLocalUploadSource(maitian.config.root, archive.file, { filename: `${exportId}.tar.gz`, mime: 'application/gzip' }, async source => {
+          res.statusCode = 200
+          res.setHeader('content-type', 'application/gzip')
+          res.setHeader('content-disposition', `attachment; filename="maitian-${exportId}.tar.gz"`)
+          res.setHeader('content-length', source.sizeBytes)
+          res.setHeader('x-content-type-options', 'nosniff')
+          await pipeline(source.stream(), res)
+        })
+      }
       if (method === 'GET' && path === 'publish/config') return json(res, 200, publishing.config.public())
       if (method === 'GET' && path === 'publish/status') return json(res, 200, await publishing.status(url.searchParams.get('id')))
+      if (method === 'GET' && path === 'publish/interrupted') return json(res, 200, await publishing.interruptionOverview())
       if (method === 'GET' && path === 'publish/options') return json(res, 200, await publishing.options(url.searchParams.get('platform')))
       if (method !== 'POST') return json(res, 405, { error: tr('不支持的方法') })
       const site = req.headers['sec-fetch-site']
@@ -321,11 +339,50 @@ export async function route(ctx, store, desk, req, res) {
       if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '')) return json(res, 415, { error: '发布操作需要 JSON 请求' })
       const body = await readJson(req)
       if (!body || typeof body !== 'object' || Array.isArray(body)) return json(res, 400, { error: '发布请求无效' })
+      if (path === 'publish/maitian/config') return json(res, 200, await maitian.save(body))
+      if (path === 'publish/maitian/probe') {
+        if (Object.keys(body).length) return json(res, 400, { error: '组件检测字段无效' })
+        return json(res, 200, await maitian.probe())
+      }
+      if (['open-install', 'open-login', 'preflight', 'open-page'].some(op => path === `publish/maitian/${op}`)) {
+        const op = path.split('/').at(-1)
+        const taskPage = op === 'open-page' && ('id' in body || 'taskId' in body)
+        const allowed = op === 'open-page' ? taskPage ? ['id', 'taskId'] : ['operationId'] : ['open-login', 'preflight'].includes(op) ? ['platform'] : []
+        if (Object.keys(body).some(key => !allowed.includes(key))) return json(res, 400, { error: '浏览器操作字段无效' })
+        if (taskPage) return json(res, 200, await maitian.openTaskPage(body))
+        return json(res, 200, await maitian.browser(op, body))
+      }
+      if (path === 'publish/maitian/export') {
+        if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'confirmExisting'].includes(key))) return json(res, 400, { error: '工程导出字段无效' })
+        return json(res, 200, await maitian.export(body))
+      }
+      if (path === 'publish/maitian/prepare') {
+        if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'account'].includes(key))) return json(res, 400, { error: '浏览器准备字段无效' })
+        return json(res, 200, { preparation: await maitian.prepare(body) })
+      }
+      if (path === 'publish/maitian/start') {
+        if (Object.keys(body).some(key => !['id', 'taskId', 'confirmed', 'projectDigest'].includes(key))) return json(res, 400, { error: '浏览器确认字段无效' })
+        return json(res, 202, { job: await maitian.start(body) })
+      }
+      if (path === 'publish/maitian/cancel') {
+        if (Object.keys(body).some(key => !['id', 'taskId'].includes(key))) return json(res, 400, { error: '浏览器停止字段无效' })
+        return json(res, 200, { job: await maitian.cancel(body) })
+      }
+      if (path === 'publish/maitian/review') {
+        if (Object.keys(body).some(key => !['id', 'taskId', 'account'].includes(key))) return json(res, 400, { error: '浏览器查询字段无效' })
+        return json(res, 200, { job: await maitian.review(body) })
+      }
+      if (path === 'publish/maitian/reconcile') return json(res, 200, { job: await maitian.reconcile(body) })
+      if (path === 'publish/maitian/open-management') {
+        if (Object.keys(body).some(key => !['id', 'taskId'].includes(key))) return json(res, 400, { error: '作品管理页字段无效' })
+        return json(res, 200, await maitian.openManagement(body))
+      }
       if (path === 'publish/config') return json(res, 200, await publishing.config.save(body))
       if (path === 'publish/test') return json(res, 200, await publishing.config.test(body.platform))
       if (path === 'publish/prepare') return json(res, 200, { preparation: await publishing.prepare(body) })
       if (path === 'publish/start') return json(res, 202, { job: await publishing.start(body) })
       if (path === 'publish/review') return json(res, 200, { job: await publishing.review(body) })
+      if (path === 'publish/recover-interrupted') return json(res, 200, { job: await publishing.recoverInterrupted(body) })
       return json(res, 404, { error: tr('接口不存在') })
     } catch (err) {
       const status = err.status || (err instanceof PublishError ? 502 : 500)
@@ -488,7 +545,7 @@ export async function route(ctx, store, desk, req, res) {
           ({ storage, settings: updated } = await openStorage(store, body.documentDir))
           desk.settled = false
         } else {
-          storage = await relocateStorage(store, body.documentDir, { settingsPatch: body })
+          storage = await relocateStorage(store, body.documentDir, { settingsPatch: body, snapshots: desk.maitianPublishing?.snapshots })
         }
       }
       if (!opening) {

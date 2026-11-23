@@ -44,7 +44,7 @@ export function emptyWorkspace(item) {
     selectedVideo: item.sample ? assets.find(a => a.type === 'video')?.id || '' : '', selectedCover: assets.find(a => a.role === 'cover')?.id || '', imageIds: [], segments: [],
     ideaText: null, outlineText: '', promptText: null, coverPromptText: null, coverDesign: emptyCoverDesign(item.production?.title || item.title),
     promptSettings: { model: 'general', ratio: '9:16', duration: '30', style: '', referenceIds: [] },
-    publish: { ...sourceCopy(item), format: 'video', mode: 'manual', when: '', visibility: 'public' }, publishEdited: {}, publishSource: sourceCopy(item),
+    publish: { ...sourceCopy(item), format: 'video', mode: 'manual', provider: 'api', timezone: 'Asia/Shanghai', browser: { profileId: 'default', covers: {}, shortTitle: '' }, when: '', visibility: 'public' }, publishEdited: {}, publishSource: sourceCopy(item),
   }
 }
 
@@ -95,6 +95,14 @@ export function sanitizeWorkspace(item, input, current) {
   ws.segments = list(input.segments, 300).filter(s => object(s) && /^[\w-]{1,100}$/.test(s.id) && !seen.has(s.id) && seen.add(s.id)).map(s => ({ id: s.id, title: string(s.title, 1000), seconds: Math.max(1, Math.min(180, Number(s.seconds) || 5)), voice: string(s.voice, 10000), prompt: string(s.prompt, 30000), image: sources.has(s.image) ? s.image : '' }))
   const publish = input.publish || {}
   ws.publish = { title: string(publish.title, 2000), description: string(publish.description, 200000), platform: ['公众号', '小红书', '抖音', '快手', 'B站', '视频号', 'TikTok', 'Instagram', 'YouTube', 'Facebook', 'LinkedIn', 'X', 'Pinterest', 'Threads', 'Bluesky'].includes(publish.platform) ? publish.platform : '小红书', format: ['images', 'text', 'article'].includes(publish.format) ? publish.format : 'video', tags: string(publish.tags, 10000), mode: ['manual', 'now', 'scheduled'].includes(publish.mode) ? publish.mode : 'manual', when: /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(publish.when) ? publish.when : '', visibility: 'public' }
+  const browser = object(publish.browser) ? publish.browser : {}
+  ws.publish.provider = publish.provider === 'maitian' ? 'maitian' : 'api'
+  ws.publish.timezone = string(publish.timezone, 100) || 'Asia/Shanghai'
+  ws.publish.browser = {
+    profileId: /^[a-zA-Z0-9_-]{1,60}$/.test(browser.profileId || '') ? browser.profileId : 'default',
+    shortTitle: string(browser.shortTitle, 2000),
+    covers: Object.fromEntries(['3x4', '4x3'].filter(ratio => live.get(browser.covers?.[ratio])?.type === 'image').map(ratio => [ratio, browser.covers[ratio]])),
+  }
   ws.publishEdited = Object.fromEntries(['title', 'description', 'platform', 'tags'].map(key => [key, input.publishEdited?.[key] === true || key === 'tags' && input.publishEdited?.tags === undefined && Boolean(input.publish?.tags) && input.publishSource?.tags === undefined]))
   ws.publishSource = Object.fromEntries(['title', 'description', 'platform', 'tags'].map(key => [key, string(input.publishSource?.[key], key === 'description' ? 200000 : key === 'tags' ? 10000 : 2000)]))
   ws.schemaVersion = WORKSPACE_SCHEMA

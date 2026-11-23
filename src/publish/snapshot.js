@@ -18,7 +18,7 @@ function assetPath(root, itemId, src) {
   return join(root, '内容', itemId, '素材', parts.at(-1))
 }
 
-export async function inspectSelection(root, itemId, ws, id, type, snapshotDir, imageIndex, { maxBytes } = {}) {
+export async function inspectSelection(root, itemId, ws, id, type, snapshotDir, imageIndex, { maxBytes, beforeCopy } = {}) {
   if (imageIndex !== undefined && (type !== 'image' || !Number.isInteger(imageIndex) || imageIndex < 0)) throw fail('本地图片序号无效')
   if (!id || ws.hidden.includes(id) || ws.trash.some(row => row.assetId === id)) throw fail(type === 'video' ? '请选择可用的本地成片' : '请选择可用的本地图片')
   const asset = ws.assets.find(row => row.id === id && row.type === type)
@@ -34,6 +34,7 @@ export async function inspectSelection(root, itemId, ws, id, type, snapshotDir, 
     return await withLocalUploadSource(root, path, { filename, mime }, async source => {
       const limit = maxBytes ?? (type === 'video' ? MAX_ASSET_BYTES : PUBLISH_COVER_BYTES)
       if (!Number.isSafeInteger(limit) || limit <= 0 || source.sizeBytes > limit) throw fail(type === 'video' ? '发布成片不能超过 250 MB' : maxBytes === undefined ? '发布图片不能超过 10 MiB' : '发布图片超过当前平台的大小限制')
+      if (destination) await beforeCopy?.({ sizeBytes: source.sizeBytes })
       const hash = createHash('sha256')
       let header = Buffer.alloc(0)
       const add = chunk => {

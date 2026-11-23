@@ -56,6 +56,8 @@
     "README.md",
     "THIRD-PARTY-NOTICES.txt",
     "docs/local-publishing-entry.md",
+    "docs/maitian-publishing-integration-plan.md",
+    "docs/maitian-development-progress.md",
     "docs/local-bilibili-publishing-plan.md",
     "docs/local-youtube-publishing-plan.md",
     "docs/local-bluesky-publishing.md",

@@ -9,12 +9,15 @@ import { API_PLATFORMS, INITIAL_PUBLISH_FIELDS, publishAccountIssue, publishOpti
 import { flushWorkspace, formatBytes, prepareWorkspacePublish } from './workspace.js'
 import { openPublishSettings } from './publish-settings.jsx'
 import { useDesk } from './desk.js'
+import { MAPPED_PLATFORMS } from '../src/publish/maitian/project.js'
+import { MaitianTaskActions } from './maitian-history.jsx'
+import { ApiInterruptionRecovery } from './api-recovery.jsx'
 
-const STATUS = { publishing: '正在投稿', pending_review: '平台处理中', published: '投稿完成', failed: '投稿失败', rejected: '平台拒绝', unknown: '请到平台核对' }
+const STATUS = { prepared: '已准备，尚未上传', publishing: '正在投稿', pending_review: '平台处理中', published: '投稿完成', failed: '投稿失败', rejected: '平台拒绝', unknown: '请到平台核对', queued: '等待浏览器执行', preflighting: '检查浏览器登录', uploading: '正在上传', filling: '正在填写', awaiting_user: '已填好，待你发布', scheduled: '已在平台确认定时', cancelled: '已取消' }
 const PRIVACY = { private: '私密', unlisted: '不公开列出', public: '公开' }
 const DOUYIN_PRIVACY = { private: '仅自己可见', friends: '好友可见', public: '公开' }
 const TIKTOK_PRIVACY = { ...DOUYIN_PRIVACY, followers: '关注者可见' }
-const platformName = key => PUBLISH_PLATFORMS[key]?.name || '—'
+const platformName = key => PUBLISH_PLATFORMS[key]?.name || MAPPED_PLATFORMS[key] || '—'
 const safeWorkLink = job => PUBLISH_PLATFORMS[job.platform]?.workUrl?.test(job.url || '')
 const textConfirmation = {
   bluesky: '确认后，DSH Host 会将下列文字直接公开发布到 Bluesky。',
@@ -63,7 +66,7 @@ export function usePublishing(id, platformName, enabledMode) {
   React.useEffect(() => { if (!settingsOpen) { void refresh(); reload() } }, [settingsOpen, refresh])
   const configured = Boolean(platform && info?.platforms?.[platform])
   const jobs = info?.jobs || []
-  const polling = jobs.some(job => job.status === 'publishing')
+  const polling = jobs.some(job => job.provider === 'maitian' ? job.executionActive : job.status === 'publishing')
   React.useEffect(() => {
     if (!polling) return
     const timer = setInterval(() => void refresh(), 3000)
@@ -77,7 +80,7 @@ export function usePublishing(id, platformName, enabledMode) {
     return () => { current = false }
   }, [configured, enabledMode, platform, reloadKey])
   const options = enabledMode && remote?.platform === platform && remote?.reloadKey === reloadKey ? remote : null
-  return { platform, capabilities: PUBLISH_PLATFORMS[platform], configured, apiMode: enabledMode, known: Boolean(info), options, jobs, refresh, reload, statusError, locked: Boolean(info?.lockedPlatforms?.[platform]) }
+  return { platform, capabilities: PUBLISH_PLATFORMS[platform], configured, apiMode: enabledMode, known: Boolean(info), options, jobs, refresh, reload, statusError, lockedPlatforms: info?.lockedPlatforms || {}, locked: Boolean(info?.lockedPlatforms?.[platform]) }
 }
 
 function Select({ label, value, onChange, children }) {
@@ -360,17 +363,19 @@ export function PublishHistory({ id, publishing }) {
     <div className="md-work-panel-title"><h3>{t('投稿记录')}</h3><button type="button" className="md-btn is-small" onClick={refresh}>{t('刷新')}</button></div>
     {jobs.map(job => <article key={job.taskId}>
       <strong>{job.title} · {t(platformName(job.platform))}</strong>
-      <p>{job.account} · {t(STATUS[job.status] || '请到平台核对')}{job.actualPrivacy ? ` · ${t(PRIVACY[job.actualPrivacy])}` : ''}</p>
+      <p>{job.account} · {job.provider === 'maitian' ? `${t('浏览器填写')} · ` : ''}{t(STATUS[job.status] || '请到平台核对')}{job.actualPrivacy ? ` · ${t(PRIVACY[job.actualPrivacy])}` : ''}</p>
       {job.platform === 'douyin' && job.status === 'pending_review' && !job.canReview ? <p>{t('已收到投稿回执，请在抖音创作中心核对。')}</p> : null}
       {job.platform === 'linkedin' && job.receiptId ? <p>{t('LinkedIn 已确认创建帖子。API 回查需额外读取权限，也可直接打开帖子核对。')}</p> : null}
       {job.platform === 'facebook' && ['story', 'photo_story'].includes(job.destination) ? <p>{t(job.destination === 'photo_story' ? '照片快拍（Story）' : '视频快拍（Story）')} · {t('快拍的展示期限由 Facebook 决定，发布回执不代表永久可见；请到公共主页核对。')}</p> : null}
-      {job.message || job.reviewError ? <p role="status">{job.reviewError || job.message}</p> : null}
+      {job.message || job.reviewError ? <p role="status">{t(job.reviewError || job.message)}</p> : null}
       {job.coverResult ? <p role="status">{t(job.coverResult.message || '视频回执已保存，正在等待处理并设置缩略图。')}</p> : null}
       <div className="md-work-actions">
         {safeWorkLink(job) ? <a className="md-btn is-small" href={job.url} target="_blank" rel="noreferrer">{t('查看作品')}</a> : null}
         {(job.status === 'unknown' || job.status === 'pending_review' || (job.status === 'published' && !safeWorkLink(job)) || (job.coverResult && job.coverResult.status !== 'set')) && PUBLISH_PLATFORMS[job.platform]?.studio ? <a className="md-btn is-small" href={PUBLISH_PLATFORMS[job.platform].studio} target="_blank" rel="noreferrer">{t(PUBLISH_PLATFORMS[job.platform].studioLabel || '打开平台创作中心')}</a> : null}
-        {job.canReview ? <button type="button" className="md-btn is-small" disabled={Boolean(checking)} onClick={() => void check(job.taskId)}>{t(checking === job.taskId ? '正在查询…' : '查询平台状态')}</button> : null}
+        {job.canReview && job.provider !== 'maitian' ? <button type="button" className="md-btn is-small" disabled={Boolean(checking)} onClick={() => void check(job.taskId)}>{t(checking === job.taskId ? '正在查询…' : '查询平台状态')}</button> : null}
       </div>
+      {job.provider === 'maitian' ? <MaitianTaskActions id={id} job={job} request={request} refresh={refresh} /> : null}
+      {job.provider !== 'maitian' ? <ApiInterruptionRecovery id={id} job={job} request={request} refresh={refresh} /> : null}
     </article>)}
     {error ? <p role="alert">{error}</p> : null}
   </section>
