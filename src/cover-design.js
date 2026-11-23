@@ -1,4 +1,5 @@
 import { storedAssetPath, validAssetPath } from './asset-storage.js'
+import { assertUploadRoot } from './asset-upload.js'
 import { readFile, realpath, stat } from 'node:fs/promises'
 import { join, relative } from 'node:path'
 import { Readable } from 'node:stream'
@@ -57,7 +58,7 @@ function checkCoverPrompt(value, title, ratio) {
 export async function coverPromptAction(ctx, store, desk, body) {
   const assets = desk.assets ??= new ContentAssets(store)
   const ws = await assets.read(body.id)
-  if (ws.revision !== body.revision) throw fail('内容已在其他窗口更新，请重新加载后再保存', 409)
+  if (ws.revision !== body.revision) throw fail('工作区版本已更新，请合并或重新加载后再保存', 409)
   const item = (await store.read()).items.find(row => row.id === body.id)
   const d = ws.coverDesign
   if (!body.titles && !d?.title?.trim()) throw fail('请先填写封面标题')
@@ -119,19 +120,43 @@ export async function coverPromptAction(ctx, store, desk, body) {
 
 export async function coverImageAction(ctx, store, desk, body) {
   const assets = desk.assets ??= new ContentAssets(store)
+  const root = store.root
   const ws = await assets.read(body.id)
-  if (ws.revision !== body.revision) throw fail('内容已在其他窗口更新，请重新加载后再保存', 409)
-  if (!COVER_RATIOS.includes(body.ratio)) throw fail('封面比例无效')
-  const savedPrompt = ws.coverDesign?.variants[body.ratio]?.prompt
-  const prompt = savedPrompt?.trim() ? `${savedPrompt}\n严格 ${body.ratio} 画幅，按目标画幅原生构图，不拉伸人物。` : ''
-  if (!prompt?.trim()) throw fail('请先生成或填写当前比例的提示词')
+  assertUploadRoot(store, root)
+  if (ws.revision !== body.revision) throw fail('工作区版本已更新，请合并或重新加载后再保存', 409)
+  const ratios = body.ratios === undefined ? [body.ratio] : body.ratios
+  if (!Array.isArray(ratios) || !ratios.length || ratios.length > COVER_RATIOS.length || new Set(ratios).size !== ratios.length || ratios.some(ratio => !COVER_RATIOS.includes(ratio))) throw fail('封面比例无效')
+  const prompts = ratios.map(ratio => {
+    const savedPrompt = ws.coverDesign?.variants[ratio]?.prompt
+    if (!savedPrompt?.trim()) throw fail(`${ratio}：${tr('请先生成或填写当前比例的提示词')}`)
+    return `${savedPrompt}\n严格 ${ratio} 画幅，按目标画幅原生构图，不拉伸人物。`
+  })
   const refs = await coverReferences(store, ws)
   const settings = await desk.settings.read()
-  let result
-  if (settings.image.source === 'tool') {
-    if (refs.length) throw fail('当前 DSH 生图接入尚不支持参考图，请在 API 设置选择支持图片编辑的图片 API')
-    result = await generateToolImage(ctx, { ...settings.image, toolSize: 'auto' }, prompt)
-  } else result = await generateCoverHttpImage(settings.image, prompt, refs, body.ratio)
-  const checked = imageBuffer(result.buffer)
-  return assets.import(body.id, Readable.from([checked.buffer]), { name: `cover-${body.ratio.replace(':', 'x')}-${Date.now()}${checked.ext}`, revision: body.revision, coverResult: true })
+  assertUploadRoot(store, root)
+  if (settings.image.source === 'tool' && refs.length) throw fail('当前 DSH 生图接入尚不支持参考图，请在 API 设置选择支持图片编辑的图片 API')
+  const generated = await Promise.allSettled(ratios.map(async (ratio, index) => {
+    const result = settings.image.source === 'tool'
+      ? await generateToolImage(ctx, { ...settings.image, toolSize: 'auto' }, prompts[index])
+      : await generateCoverHttpImage(settings.image, prompts[index], refs, ratio)
+    return imageBuffer(result.buffer)
+  }))
+  let workspace = ws
+  const results = [], errors = []
+  for (const [index, result] of generated.entries()) {
+    const ratio = ratios[index]
+    try {
+      if (result.status === 'rejected') throw result.reason
+      const checked = result.value
+      assertUploadRoot(store, root)
+      const saved = await assets.import(body.id, Readable.from([checked.buffer]), { name: `cover-${ratio.replace(':', 'x')}-${Date.now()}${checked.ext}`, revision: workspace.revision, coverRatio: ratio, mergeCoverResult: true })
+      workspace = saved.workspace
+      results.push({ ratio, asset: saved.asset })
+    } catch (error) {
+      if (ratios.length === 1) throw error
+      errors.push({ ratio, error: error.message })
+    }
+  }
+  if (!results.length) throw fail(errors.map(row => `${row.ratio}：${row.error}`).join('\n'), 502)
+  return { workspace, results, errors, ...(ratios.length === 1 ? { asset: results[0].asset } : {}) }
 }

@@ -8,12 +8,12 @@ import { PUBLISH_CONFIG_FIELDS } from '../src/publish/config-schema.js'
 
 const require = createRequire(import.meta.url)
 const compiled = await build({
-  stdin: { contents: "export { PublishSettingsDialog, openPublishSettings } from './client/publish-settings.jsx'; export { setDesk } from './client/desk.js'; export { SettingsDialog } from './client/settings.jsx'", resolveDir: process.cwd(), loader: 'js' },
+  stdin: { contents: "export { Select as SelectControl } from './client/select.jsx'; export { PublishSettingsDialog, openPublishSettings } from './client/publish-settings.jsx'; export { setDesk } from './client/desk.js'; export { SettingsDialog } from './client/settings.jsx'", resolveDir: process.cwd(), loader: 'js' },
   bundle: true, write: false, format: 'cjs', platform: 'node', external: ['react'],
 })
 const module = { exports: {} }
 new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(require, module, module.exports)
-const { PublishSettingsDialog, openPublishSettings, setDesk, SettingsDialog } = module.exports
+const { SelectControl, PublishSettingsDialog, openPublishSettings, setDesk, SettingsDialog } = module.exports
 const response = () => ({ platforms: Object.fromEntries(Object.entries(PUBLISH_CONFIG_FIELDS).map(([platform, fields]) => [platform, {
   enabled: false, configured: false,
   fields: Object.fromEntries(fields.filter(field => !field.secret).map(field => [field.key, ''])),
@@ -45,7 +45,7 @@ test('配置请求失败后切换平台仍显示错误和字段，不再只剩�
   assert.match(text(renderer), /Host 配置读取失败/)
   assert.match(text(renderer), /Page ID/)
   assert.match(text(renderer), /Access Token/)
-  await act(async () => { renderer.root.findByType('select').props.onChange({ target: { value: 'youtube' } }) })
+  await act(async () => { renderer.root.findByType(SelectControl).props.onChange({ target: { value: 'youtube' } }) })
   assert.match(text(renderer), /Host 配置读取失败/)
   assert.match(text(renderer), /Client ID \/ App ID/)
   assert.equal(button(renderer, '保存账号配置').props.disabled, true)
@@ -100,11 +100,11 @@ test('配置失败仍能阅读获取引导，切换平台同步切换步骤、�
     assert.equal(node.props.rel, 'noopener noreferrer')
     assert.ok(node.props.href.startsWith('https://'))
   }
-  await act(async () => { renderer.root.findByType('select').props.onChange({ target: { value: 'youtube' } }) })
+  await act(async () => { renderer.root.findByType(SelectControl).props.onChange({ target: { value: 'youtube' } }) })
   assert.match(text(renderer), /Google Cloud/)
   assert.match(text(renderer), /youtube.upload/)
   assert.equal(renderer.root.findAllByType('a').some(node => node.props.href.includes('facebook.com')), false)
-  await act(async () => { renderer.root.findByType('select').props.onChange({ target: { value: 'bluesky' } }) })
+  await act(async () => { renderer.root.findByType(SelectControl).props.onChange({ target: { value: 'bluesky' } }) })
   assert.match(text(renderer), /App Passwords/)
   assert.match(text(renderer), /不要使用主账号密码/)
   assert.ok(renderer.root.findAllByType('a').some(node => node.props.href === 'https://bsky.app/settings/app-passwords'))
@@ -167,7 +167,7 @@ test('切换平台保留独立草稿，保存其他平台不会覆盖，关闭�
     }
     return Response.json(saved)
   }, 'youtube')
-  const switchTo = async platform => act(async () => renderer.root.findByType('select').props.onChange({ target: { value: platform } }))
+  const switchTo = async platform => act(async () => renderer.root.findByType(SelectControl).props.onChange({ target: { value: platform } }))
   const inputs = () => renderer.root.findAllByType('input')
   await act(async () => {
     inputs()[0].props.onChange({ target: { checked: true } })
@@ -193,7 +193,7 @@ test('平台草稿保留清除凭据选择与快手上传风险确认', async co
   const data = response()
   data.platforms.facebook.secrets.ACCESS_TOKEN = true
   const renderer = await render(context, async () => Response.json(data))
-  const switchTo = async platform => act(async () => renderer.root.findByType('select').props.onChange({ target: { value: platform } }))
+  const switchTo = async platform => act(async () => renderer.root.findByType(SelectControl).props.onChange({ target: { value: platform } }))
   const checks = () => renderer.root.findAllByType('input').filter(node => node.props.type === 'checkbox')
   await act(async () => { checks()[1].props.onChange({ target: { checked: true } }) })
   await switchTo('kuaishou')

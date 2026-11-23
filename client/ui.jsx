@@ -2,6 +2,8 @@
 import React from 'react'
 import { setDesk, undo, useDesk } from './desk.js'
 import { t } from './i18n.js'
+import { Select } from './select.jsx'
+export { Select }
 
 const PATHS = {
   plus: 'M12 5v14M5 12h14',
@@ -84,6 +86,8 @@ export function Dialog({ title, onClose, children, width = 440, className = '' }
   React.useEffect(() => {
     const onKey = (event) => {
       if (event.key === 'Escape') {
+        // 先让选择弹层处理 Escape，第二次再关闭所属对话框。
+        if (ref.current?.closest('.md-root')?.querySelector('.md-select-popover')) return
         event.stopPropagation()
         close.current()
       }
@@ -129,9 +133,9 @@ export function FormDialog() {
             {field.type === 'textarea' ? (
               <textarea rows={field.rows ?? 3} value={values[field.name] ?? ''} placeholder={field.placeholder} required={field.required} onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))} />
             ) : field.type === 'select' ? (
-              <select value={values[field.name] ?? ''} required={field.required} onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))}>
+              <Select value={values[field.name] ?? ''} required={field.required} onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))}>
                 {field.options.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
-              </select>
+              </Select>
             ) : (
               <input type={field.type ?? 'text'} value={values[field.name] ?? ''} placeholder={field.placeholder} required={field.required} onChange={e => setValues(v => ({ ...v, [field.name]: e.target.value }))} />
             )}

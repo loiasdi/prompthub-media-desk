@@ -193,8 +193,9 @@
 .md-root .md-board-card-open { display: block; width: 100%; text-align: left; }
 .md-content-files { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 6px; color: var(--ink3); font-size: 10px; line-height: 16px; }
 .md-content-files small { display: inline-flex; align-items: center; gap: 2px; font-size: inherit; color: var(--ink2); }
-.md-content-card-actions { display: flex; gap: 4px; padding: 8px 0 0; border-top: 1px solid var(--line); }
-.md-root .md-content-card-actions > button { flex: 1; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 4px; border-radius: 6px; color: var(--ink3); font-size: 11px; }
+.md-content-card-actions { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 0 0; border-top: 1px solid var(--line); }
+.md-root .md-content-card-actions > button { flex: 1 0 auto; display: flex; align-items: center; justify-content: center; gap: 4px; padding: 4px 2px; border-radius: 6px; color: var(--ink3); font-size: 11px; white-space: nowrap; }
+.md-content-card-actions > button > svg { flex: none; }
 .md-content-card-actions > button:hover { background: var(--hover); color: var(--ink); }
 .md-content-table-files { min-width: 180px; }
 .md-content-files.is-compact { padding: 0; }
@@ -519,7 +520,8 @@
 
 .md-workspace-item-tools { display: flex; align-items: center; gap: 2px; padding-right: 8px; border-right: 1px solid var(--line); }
 .md-workspace-status { display: flex; align-items: center; gap: 6px; color: var(--ink3); font-size: 11px; }
-.md-root .md-workspace-status select { width: auto; height: 30px; padding: 0 6px; font-size: 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
+.md-workspace-status .md-select { width: auto; min-width: 100px; }
+.md-root .md-workspace-status .md-select-trigger { min-height: 30px; padding: 4px 8px; font-size: 12px; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
 .md-editor .md-workspace-header { height: auto; min-height: 56px; }
 .md-editor .md-content-workspace { grid-template-rows: auto minmax(0, 1fr); }
 @media (max-width: 1100px) {

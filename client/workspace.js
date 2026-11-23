@@ -1,4 +1,5 @@
 import { COVER_RATIOS, COVER_STYLES, emptyCoverDesign, sanitizeCoverDesign } from '../src/cover-design-schema.js'
+import { normalizeCoverAssets, selectedCoverIds } from '../src/cover-assets.js'
 // 内容制作草稿与服务端工作区的同步，以及页面所需的素材投影。
 import React from 'react'
 import { lang, t } from './i18n.js'
@@ -23,6 +24,7 @@ export function createWorkspaceDraft(item) {
     assets: [], hidden: [], trash: [], edits: {}, folders: [],
     selectedVideo: item.sample ? assets.find(a => a.type === 'video')?.id || '' : '',
     selectedCover: assets.find(a => a.role === 'cover')?.id || '',
+    selectedCoverIds: assets.filter(a => a.role === 'cover').slice(0, 1).map(a => a.id),
     imageIds: [], segments: item.sample ? segmentsFromShots(item) : [],
     ideaText: null, outlineText: '', promptText: null, coverPromptText: null, coverDesign: emptyCoverDesign(item.production?.title || item.title),
     promptSettings: { model: 'general', ratio: '9:16', duration: '30', style: '', referenceIds: [] },
@@ -33,7 +35,7 @@ export function createWorkspaceDraft(item) {
 
 export function workspaceAssets(item, draft) {
   const hidden = new Set(draft.hidden)
-  return [...new Map([...sourceAssets(item), ...draft.assets].map(a => [a.id, a])).values()].filter(a => !hidden.has(a.id)).map(a => ({ ...localizeAsset(a), ...draft.edits[a.id] }))
+  return normalizeCoverAssets([...new Map([...sourceAssets(item), ...draft.assets].map(a => [a.id, a])).values()], draft.coverDesign).filter(a => !hidden.has(a.id)).map(a => ({ ...localizeAsset(a), ...draft.edits[a.id] }))
 }
 
 // 只统计页面里的实际内容，自动带入的标题和发布文案不算已填写。
@@ -77,7 +79,8 @@ export function resolveWorkspaceDraft(item, stored, assets = workspaceAssets(ite
     coverDesign: sanitizeCoverDesign(stored.coverDesign, assets, item.production?.title || item.title),
     publishChanges: PUBLISH_SOURCE_FIELDS.filter(field => publishEdited[field] && (field !== 'tags' || stored.publishSource.tags !== undefined) && stored.publishSource[field] !== source[field]),
     selectedVideo: available.has(stored.selectedVideo) ? stored.selectedVideo : '',
-    selectedCover: available.has(stored.selectedCover) ? stored.selectedCover : '',
+    selectedCover: selectedCoverIds(stored).find(id => available.has(id)) || '',
+    selectedCoverIds: selectedCoverIds(stored).filter(id => available.has(id)),
     imageIds: stored.imageIds.filter(id => available.has(id)),
     segments: stored.segments.map(segment => ({ ...segment, image: sources.has(segment.image) ? segment.image : '' })),
     promptSettings: { ...stored.promptSettings, referenceIds: stored.promptSettings.referenceIds.filter(id => available.has(id)) },
@@ -108,6 +111,8 @@ export const flushAllWorkspaces = () => workspaceStore.flushAll()
 export const importWorkspaceFiles = (id, files, folder) => workspaceStore.importFiles(id, files, folder)
 export const recycleWorkspaceAsset = (id, assetId, restore) => workspaceStore.recycle(id, assetId, restore)
 export const runCoverAction = (item, path, body) => workspaceStore.action(item.id, path, body)
+export const runCoverTask = (id, kind, run) => workspaceStore.coverTask(id, kind, run)
+export const useCoverBusy = item => React.useSyncExternalStore(workspaceStore.subscribe, () => workspaceStore.get(item).coverBusy || '')
 export const prepareWorkspacePublish = (id, platform, options) => workspaceStore.action(id, 'publish/prepare', { platform, options })
 export const exportMaitianProject = (id, target, confirmExisting) => workspaceStore.action(id, 'publish/maitian/export', Array.isArray(target) ? { platforms: target, confirmExisting } : { platform: target, confirmExisting })
 export const prepareMaitianPublish = (id, platform, account) => workspaceStore.action(id, 'publish/maitian/prepare', { platform, account })
@@ -124,7 +129,7 @@ export function useWorkspace(item) {
     const source = publishSource(item)
     return { publish: { ...d.publish, ...Object.fromEntries(d.publishChanges.map(field => [field, source[field]])) }, publishEdited: Object.fromEntries(d.publishChanges.map(field => [field, false])) }
   })
-  return { draft, update, assets, syncPublish, persistence: entry, retrySave: () => workspaceStore.flush(item.id), reloadWorkspace: () => workspaceStore.reload(item.id) }
+  return { draft, update, assets, syncPublish, persistence: entry, retrySave: () => workspaceStore.flush(item.id), reloadWorkspace: () => workspaceStore.reload(item.id), rebaseWorkspace: () => workspaceStore.rebase(item.id) }
 }
 
 export function segmentsFromShots(item) {

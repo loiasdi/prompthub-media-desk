@@ -1,3 +1,4 @@
+import { Select as SelectControl } from './select.jsx'
 import React from 'react'
 import { PUBLISH_PLATFORMS, publishUsesArticleImages, publishUsesCover } from '../src/publish/capabilities.js'
 import { articleImageMarker, replaceArticleImages } from '../src/publish/article-images.js'
@@ -84,7 +85,7 @@ export function usePublishing(id, platformName, enabledMode) {
 }
 
 function Select({ label, value, onChange, children }) {
-  return <label className="md-field"><span>{t(label)}</span><select value={value} onChange={event => onChange(event.target.value)}>{children}</select></label>
+  return <label className="md-field"><span>{t(label)}</span><SelectControl value={value} onChange={event => onChange(event.target.value)}>{children}</SelectControl></label>
 }
 
 export function PublishAccount({ publishing }) {
@@ -149,9 +150,9 @@ const CAPTION_OVERRIDES = { bluesky: blueskyCaption, douyin: douyinCaption, face
 export function ArticleImagePicker({ assets, onInsert }) {
   return <section className="md-work-panel md-publish-article-images">
     <div className="md-work-panel-title"><h3>{t('正文配图')}</h3><span>{t('可选')}</span></div>
-    <label className="md-field"><span>{t('插入正文配图')}</span><select value="" onChange={event => { if (event.target.value) onInsert(articleImageMarker(event.target.value)) }}>
+    <label className="md-field"><span>{t('插入正文配图')}</span><SelectControl value="" onChange={event => { if (event.target.value) onInsert(articleImageMarker(event.target.value)) }}>
       <option value="">{t('选择图片并插入标记')}</option>{assets.filter(asset => asset.type === 'image').map(asset => <option key={asset.id} value={asset.id}>{asset.name}</option>)}
-    </select></label>
+    </SelectControl></label>
     <p className="md-publish-pending">{t('标记插入正文末尾，可移动到需要的位置；只上传标记引用的本地 JPEG/PNG，每张小于 1 MB，最多 20 张不同配图。同一张图可重复引用，不会重复上传。')}</p>
   </section>
 }

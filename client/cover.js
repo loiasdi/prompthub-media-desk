@@ -1,5 +1,44 @@
 // 合成视频封面：有画面就叠大字，没有画面就用渐变做一张纯文字封面。
 import { t } from './i18n.js'
+import { coverAssetRatio, coverChoices, selectedCoverIds } from '../src/cover-assets.js'
+import { ROLE_NAMES } from '../src/workspace-schema.js'
+
+export function coverSelectOptions(assets, ratio) {
+  return coverChoices(assets, ratio).map(asset => {
+    const width = Number(asset.width || asset.w), height = Number(asset.height || asset.h)
+    const gcd = (a, b) => b ? gcd(b, a % b) : a
+    const divisor = Number.isInteger(width) && Number.isInteger(height) && width > 0 && height > 0 ? gcd(width, height) : 0
+    const label = coverAssetRatio(asset) || (divisor ? `${width / divisor}:${height / divisor}` : t('比例未知'))
+    return { value: asset.id, label: asset.name, thumbnail: asset.src, badges: [t(ROLE_NAMES[asset.role] || '制作素材'), label] }
+  })
+}
+
+export function coverAssetLabel(asset) {
+  return [asset.role === 'cover' ? t('封面') : '', coverAssetRatio(asset), asset.name].filter(Boolean).join(' · ')
+}
+
+export function selectPublishCover(draft, asset) {
+  if (!asset) return selectPublishCovers(draft, [])
+  const ids = [asset.id, ...selectedCoverIds(draft).filter(id => id !== asset.id)]
+  const covers = { ...draft.publish?.browser?.covers }
+  const ratio = coverAssetRatio(asset)
+  if (ratio) covers[ratio.replace(':', 'x')] = asset.id
+  return {
+    selectedCover: asset.id, selectedCoverIds: ids,
+    ...(ratio ? { publish: { ...draft.publish, browser: { ...draft.publish?.browser, covers } } } : {}),
+  }
+}
+
+export function selectPublishCovers(draft, assets) {
+  const ids = [...new Set(assets.map(asset => asset.id))]
+  const removed = selectedCoverIds(draft).filter(id => !ids.includes(id))
+  const covers = Object.fromEntries(Object.entries(draft.publish?.browser?.covers || {}).filter(([, id]) => !removed.includes(id)))
+  for (const asset of assets) {
+    const ratio = coverAssetRatio(asset)
+    if (ratio) covers[ratio.replace(':', 'x')] = asset.id
+  }
+  return { selectedCover: ids[0] || '', selectedCoverIds: ids, publish: { ...draft.publish, browser: { ...draft.publish?.browser, covers } } }
+}
 
 const WIDTH = 1920
 const HEIGHT = 1080

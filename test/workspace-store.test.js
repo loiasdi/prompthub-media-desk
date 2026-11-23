@@ -9,6 +9,38 @@ const deferred = () => { let resolve; let reject; const promise = new Promise((a
 const options = { create: createWorkspaceDraft, resolve: resolveWorkspaceDraft, patch: patchWorkspaceDraft, debounceMs: 60000 }
 const fakeWorkspace = (draft, revision) => ({ ...structuredClone(draft), revision, schemaVersion: 1 })
 
+test('封面响应缺少入库登记或修订无效时不采用损坏工作区', async () => {
+  const content = item()
+  const asset = { id: 'new', src: 'new.png', type: 'image' }
+  const valid = { ...emptyWorkspace(content), assets: [asset], revision: 1 }
+  for (const workspace of [undefined, {}, { ...valid, assets: [] }, { ...valid, revision: 0 }, { ...valid, assets: [{ ...asset, src: 'wrong.png' }] }]) {
+    const store = createWorkspaceStore({ ...options, api: async () => ({ asset, workspace }) })
+    const before = store.get(content).draft
+    await assert.rejects(store.action(content.id, 'cover/image', { ratio: '3:4' }), /响应不完整/)
+    assert.deepEqual(store.get(content).draft, before)
+    assert.equal(store.get(content).revision, 0)
+  }
+})
+
+test('封面任务锁跨订阅与重新读取保留，同一内容不重复执行且失败后可重试', async () => {
+  const store = createWorkspaceStore(options)
+  const content = item()
+  store.get(content)
+  const held = deferred()
+  let calls = 0
+  const first = store.coverTask(content.id, 'image', async () => { calls++; await held.promise; throw new Error('生成失败') })
+  const failure = assert.rejects(first, /生成失败/)
+  const second = store.coverTask(content.id, 'prompts', () => { calls++ })
+  assert.equal(first, second)
+  assert.equal(store.get({ ...content }).coverBusy, 'image')
+  held.resolve()
+  await failure
+  assert.equal(calls, 1)
+  assert.equal(store.get(content).coverBusy, '')
+  await store.coverTask(content.id, 'image', () => { calls++ })
+  assert.equal(calls, 2)
+})
+
 test('保存队列：慢请求期间的后续输入会再次保存，不被旧响应覆盖', async () => {
   const first = deferred()
   const started = deferred()
@@ -87,6 +119,55 @@ test('版本冲突保留未保存编辑；用户重新加载后采用服务器�
   store.update(content, { publish: { title: '重新编辑' } })
   await store.flush(content.id)
   assert.equal(store.get(content).revision, 5)
+})
+
+test('版本冲突可基于最新版本合并保存，保留本窗口修改和另一窗口的独立字段', async () => {
+  const content = item()
+  const remote = fakeWorkspace(createWorkspaceDraft(content), 4)
+  remote.publish.mode = 'now'
+  remote.coverDesign.requirements = '另一窗口的封面要求'
+  let firstSave = true
+  let saved
+  const store = createWorkspaceStore({ ...options, api: async (path, body) => {
+    if (path.startsWith('workspace?')) return { workspace: remote }
+    if (firstSave) { firstSave = false; throw Object.assign(new Error('conflict'), { status: 409 }) }
+    saved = body.draft
+    return { workspace: fakeWorkspace(body.draft, body.revision + 1) }
+  } })
+  store.get(content)
+  store.update(content, { publish: { title: '本窗口标题' } })
+  await assert.rejects(store.flush(content.id), /conflict/)
+  await store.rebase(content.id)
+  assert.equal(saved.publish.title, '本窗口标题')
+  assert.equal(saved.publish.mode, 'now')
+  assert.equal(saved.coverDesign.requirements, '另一窗口的封面要求')
+  assert.equal(store.get(content).revision, 5)
+  assert.equal(store.get(content).status, 'saved')
+})
+
+test('封面操作的修订冲突进入恢复状态；本地草稿干净时只刷新修订号', async () => {
+  const content = item()
+  const remote = fakeWorkspace(createWorkspaceDraft(content), 4)
+  let stale = true
+  const actionRevisions = []
+  const store = createWorkspaceStore({ ...options, api: async (path, body) => {
+    if (path.startsWith('workspace?')) return { workspace: remote }
+    if (path === 'cover/titles') {
+      actionRevisions.push(body.revision)
+      if (stale) throw Object.assign(new Error('工作区版本已更新，请合并或重新加载后再保存'), { status: 409 })
+      return { titles: ['标题'] }
+    }
+    throw new Error(`unexpected request: ${path}`)
+  } })
+  store.get(content)
+  await assert.rejects(store.action(content.id, 'cover/titles', {}), /工作区版本已更新/)
+  assert.equal(store.get(content).conflict, true)
+  await store.rebase(content.id)
+  assert.equal(store.get(content).revision, 4)
+  assert.equal(store.get(content).status, 'saved')
+  stale = false
+  assert.deepEqual(await store.action(content.id, 'cover/titles', {}), { titles: ['标题'] })
+  assert.deepEqual(actionRevisions, [0, 4])
 })
 
 test('导入部分失败不会阻止后续文件，取消只停止剩余队列', async () => {
@@ -335,4 +416,24 @@ test('切换存储前立即写入所有待保存的稿件，不等待防抖计�
   await store.flushAll()
   assert.deepEqual(calls.sort(), ['edited-one', 'edited-two'])
   assert.ok(contents.every(content => store.get(content).status === 'saved'))
+})
+
+
+test('旧后端只保存默认封面时保留多选，服务更新后可按新修订保存全部选择', async () => {
+  let outdated = true
+  const content = item()
+  const store = createWorkspaceStore({ ...options, api: async (_path, body) => {
+    const workspace = fakeWorkspace(body.draft, body.revision + 1)
+    if (outdated) delete workspace.selectedCoverIds
+    return { workspace }
+  } })
+  store.update(content, { assets: [{ id: 'portrait', type: 'image' }, { id: 'wide', type: 'image' }], selectedCover: 'portrait', selectedCoverIds: ['portrait', 'wide'] })
+  await assert.rejects(store.flush(content.id), /未完整保存封面多选/)
+  assert.equal(store.get(content).revision, 1)
+  assert.deepEqual(store.get(content).draft.selectedCoverIds, ['portrait', 'wide'])
+  outdated = false
+  await store.flush(content.id)
+  assert.equal(store.get(content).status, 'saved')
+  assert.equal(store.get(content).revision, 2)
+  assert.deepEqual(store.get(content).draft.selectedCoverIds, ['portrait', 'wide'])
 })

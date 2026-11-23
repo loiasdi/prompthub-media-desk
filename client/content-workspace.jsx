@@ -1,7 +1,10 @@
+import { Select as SelectControl } from './select.jsx'
+import { generateCoverImages } from './cover-generation.js'
 import { BRAND_NAME } from '../src/brand.js'
 import { playableVideo, sourceKind, sourceImage } from '../src/inspiration-source.js'
 import { FeishuSyncDialog } from './feishu-sync.jsx'
-import { preferredCoverRatio } from './cover.js'
+import { coverSelectOptions, preferredCoverRatio, selectPublishCover, selectPublishCovers } from './cover.js'
+import { coverAssetRatio, selectedCoverIds } from '../src/cover-assets.js'
 import { ArticleImagePicker, PublishAccount, PublishChecklist, PublishControls, PublishHistory, usePublishPreparation, usePublishing } from './publish.jsx'
 import { API_PLATFORMS } from './publish-readiness.js'
 import { publishUsesArticleImages, publishUsesCover } from '../src/publish/capabilities.js'
@@ -13,7 +16,7 @@ import { closeItem, dispatchOps, revealSaved, runProduce, setDesk, startProgress
 import { t, useLang } from './i18n.js'
 import { Dialog, Icon, IconButton, Segmented } from './ui.jsx'
 import { PLATFORMS, STATUSES, STATUS_LABEL, displayItem } from './util.js'
-import { ASSET_ROLE_NAMES, cancelWorkspaceImport, downloadText, importWorkspaceFiles, recycleWorkspaceAsset, formatBytes, flushWorkspace, promptDocument, runCoverAction, useWorkspace, workspaceContentPresence, workspaceId } from './workspace.js'
+import { ASSET_ROLE_NAMES, cancelWorkspaceImport, downloadText, importWorkspaceFiles, recycleWorkspaceAsset, formatBytes, flushWorkspace, promptDocument, runCoverAction, runCoverTask, useCoverBusy, useWorkspace, workspaceContentPresence, workspaceId } from './workspace.js'
 
 import { copyVideoPromptSection, indexVideoPrompt, MAX_PROMPT_TEXT } from '../src/video-prompt-document.js'
 
@@ -33,7 +36,7 @@ function mediaInfo(asset) {
 }
 
 function Field({ label, children }) {
-  return <label className="md-field"><span>{t(label)}</span>{children}</label>
+  return <label className="md-field"><span>{t(label)}</span>{React.Children.map(children, child => React.isValidElement(child) && child.type === SelectControl ? React.cloneElement(child, { 'aria-label': t(label) }) : child)}</label>
 }
 
 async function copy(text) {
@@ -46,7 +49,7 @@ export function ContentWorkspace({ item, children }) {
   useLang()
   const tab = useDesk(s => s.studioTab === 'script' ? 'prompts' : s.studioTab || 'article')
   const assistantOpen = useDesk(s => s.studioDock) || item.production?.status === 'running'
-  const { draft, update, assets, syncPublish, persistence, retrySave, reloadWorkspace } = useWorkspace(item)
+  const { draft, update, assets, syncPublish, persistence, retrySave, reloadWorkspace, rebaseWorkspace } = useWorkspace(item)
   const title = displayItem(item).title
   const contentPresence = workspaceContentPresence(item, draft, assets)
   const tabs = [{ id: 'idea', name: '灵感', icon: 'pen' }, { id: 'outline', name: '大纲', icon: 'pen' }, { id: 'article', name: '稿件', icon: 'pen' }, { id: 'prompts', name: '视频提示词', icon: 'film' }, { id: 'cover', name: '配图与封面', icon: 'image' }, { id: 'assets', name: '素材', icon: 'folder', count: assets.length }, { id: 'publish', name: '发布', icon: 'upRight' }]
@@ -79,7 +82,7 @@ export function ContentWorkspace({ item, children }) {
       <header className="md-workspace-header" data-window-drag="">
         <div className="md-workspace-title"><IconButton icon="chevL" label={t('返回内容')} onClick={closeItem} /><div><span title={t('内容档案')}>{BRAND_NAME}</span><h1 title={title}>{title}</h1></div></div>
         <div className="md-workspace-tools">
-          <label className="md-workspace-status"><span>{t('状态')}</span><select aria-label={t('内容状态')} value={item.status || 'idea'} disabled={item.production?.status === 'running'} onChange={e => changeStatus(e.target.value)}>{STATUSES.map(status => <option value={status} key={status}>{t(STATUS_LABEL[status])}</option>)}</select></label>
+          <label className="md-workspace-status"><span>{t('状态')}</span><SelectControl aria-label={t('内容状态')} value={item.status || 'idea'} disabled={item.production?.status === 'running'} onChange={e => changeStatus(e.target.value)}>{STATUSES.map(status => <option value={status} key={status}>{t(STATUS_LABEL[status])}</option>)}</SelectControl></label>
           {nextStatus ? <button type="button" className="md-btn is-small" disabled={item.production?.status === 'running'} onClick={() => changeStatus(nextStatus)}>{t(nextStatus === 'published' ? '标记已发布' : `进入${STATUS_LABEL[nextStatus]}`)}<Icon name="chevR" size={13} /></button> : null}
           <div className="md-workspace-item-tools">
             {item.production?.savedAt ? <IconButton icon="folder" label={t('打开保存的文件夹')} onClick={() => revealSaved(item.id)} /> : null}
@@ -95,7 +98,7 @@ export function ContentWorkspace({ item, children }) {
         const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (['ArrowRight', 'ArrowDown'].includes(event.key) ? 1 : -1) + tabs.length) % tabs.length
         onTab(tabs[next].id)
         document.getElementById(`workspace-tab-${tabs[next].id}`)?.focus()
-      }}><Icon name={entry.icon} size={15} />{t(entry.name)}{contentPresence[entry.id] ? <i className="md-workspace-content-dot" aria-hidden="true" /> : null}{entry.count !== undefined ? <span>{entry.count}</span> : null}</button>)}</div><span className="md-workspace-preview" role="status">{persistence.status === 'error' ? <><span>{t('保存失败')}：{persistence.error}</span><button type="button" onClick={() => persistence.conflict ? setDesk({ dialog: { title: t('重新加载工作区'), fields: [{ name: 'notice', type: 'hidden', label: t('这会丢弃当前窗口未保存的修改，可先导出草稿') }], onSubmit: () => reloadWorkspace().catch(err => toast(err.message, { error: true })) } }) : retrySave().catch(err => toast(err.message, { error: true }))}>{t(persistence.conflict ? '重新加载' : '重试保存')}</button><button type="button" onClick={() => downloadText(JSON.stringify(draft, null, 2), `${item.title}-draft.json`, 'application/json')}>{t('导出草稿')}</button></> : t(persistence.status === 'saved' ? '已保存' : persistence.status === 'saving' ? '正在保存…' : '有未保存修改')}</span></aside>
+      }}><Icon name={entry.icon} size={15} />{t(entry.name)}{contentPresence[entry.id] ? <i className="md-workspace-content-dot" aria-hidden="true" /> : null}{entry.count !== undefined ? <span>{entry.count}</span> : null}</button>)}</div><span className="md-workspace-preview" role="status">{persistence.status === 'error' ? <><span>{t('保存失败')}</span>{persistence.conflict ? <><button type="button" onClick={() => rebaseWorkspace().then(() => toast(t('已合并并保存'))).catch(err => toast(err.message, { error: true }))}>{t('合并并重试')}</button><button type="button" onClick={() => setDesk({ dialog: { title: t('重新加载工作区'), fields: [{ name: 'notice', type: 'hidden', label: t('这会丢弃当前窗口未保存的修改，可先导出草稿') }], onSubmit: () => reloadWorkspace().catch(err => toast(err.message, { error: true })) } })}>{t('重新加载')}</button></> : <button type="button" onClick={() => retrySave().catch(err => toast(err.message, { error: true }))}>{t('重试保存')}</button>}<button type="button" onClick={() => downloadText(JSON.stringify(draft, null, 2), `${item.title}-draft.json`, 'application/json')}>{t('导出草稿')}</button></> : t(persistence.status === 'saved' ? '已保存' : persistence.status === 'saving' ? '正在保存…' : '有未保存修改')}</span></aside>
       <section className={`md-workspace-panel ${tab === 'article' ? 'is-manuscript' : ''}`} role="tabpanel" id={`workspace-panel-${tab}`} aria-labelledby={`workspace-tab-${tab}`} key={`${item.id}:${tab}`}>
         {tab === 'article' ? children : <>
           {tab === 'idea' || tab === 'outline' ? <PlanningPage item={item} draft={draft} update={update} mode={tab} /> : tab === 'prompts' ? <PromptPage item={item} draft={draft} update={update} assets={assets} /> : tab === 'cover' ? <CoverDesignPage item={item} draft={draft} update={update} assets={assets} /> : tab === 'assets' ? <AssetsPage item={item} draft={draft} update={update} assets={assets} persistence={persistence} /> : <PublishPage key={item.id} item={item} draft={draft} update={update} assets={assets} onTab={onTab} syncPublish={syncPublish} />}
@@ -157,9 +160,7 @@ function CoverDesignPage({ item, draft, update, assets }) {
   const design = draft.coverDesign
   const [viewedRatio, setRatio] = React.useState(null)
   const ratio = viewedRatio ?? preferredCoverRatio(design, COVER_RATIOS, draft.selectedCover)
-  const [busy, setBusy] = React.useState('')
-  const [promptError, setPromptError] = React.useState('')
-  const [imageError, setImageError] = React.useState('')
+  const busy = useCoverBusy(item)
   const [titles, setTitles] = React.useState([])
   const model = useDesk(s => s.model)
   const imageReady = useDesk(s => s.settings?.imageReady)
@@ -172,13 +173,15 @@ function CoverDesignPage({ item, draft, update, assets }) {
   const patchVariant = changes => update(d => ({ coverDesign: { ...d.coverDesign, variants: { ...d.coverDesign.variants, [ratio]: { ...d.coverDesign.variants[ratio], ...changes } } } }))
   const selectedRefs = [...new Set([...design.personIds, ...design.materialIds])]
   const imagesById = new Map(images.map(asset => [asset.id, asset]))
-  const [latestCover, ...earlierCovers] = variant.imageIds.toReversed().map(id => imagesById.get(id)).filter(Boolean)
+  const latestCover = variant.imageIds.toReversed().map(id => imagesById.get(id)).find(Boolean)
+  const allPromptsReady = COVER_RATIOS.every(r => design.variants[r].prompt.trim())
+  const hasCovers = COVER_RATIOS.some(r => design.variants[r].imageIds.length)
   const renderCover = (asset, isLatest = false) => <figure className={isLatest ? 'md-cover-hero' : undefined} key={asset.id}>
     <a className="md-cover-canvas" href={asset.src} target="_blank" rel="noreferrer" aria-label={t('预览 {name}', { name: asset.name })}><img src={asset.src} alt={design.title || asset.name} loading={isLatest ? undefined : 'lazy'} /></a>
     <figcaption>
       {asset.width && asset.height ? <span>{asset.width} × {asset.height}</span> : null}
       <div className="md-work-actions">
-        <button type="button" className="md-btn is-small" aria-pressed={draft.selectedCover === asset.id} onClick={() => update({ selectedCover: asset.id })}>{t(draft.selectedCover === asset.id ? '已选发布封面' : '设为发布封面')}</button>
+        <button type="button" className="md-btn is-small" aria-pressed={selectedCoverIds(draft).includes(asset.id)} onClick={() => update(d => selectPublishCover(d, asset))}>{t(selectedCoverIds(draft).includes(asset.id) ? '已选发布封面' : '设为发布封面')}</button>
         <a className="md-inline-link" href={asset.src} download={asset.name}>{t('下载')}</a>
       </div>
     </figcaption>
@@ -191,37 +194,31 @@ function CoverDesignPage({ item, draft, update, assets }) {
     finally { setImporting(false) }
   }
   const selectImages = key => <div className="md-cover-reference-grid">{referenceImages.map(asset => <label key={asset.id}><input type="checkbox" checked={design[key].includes(asset.id)} onChange={event => patch({ [key]: event.target.checked ? [...design[key], asset.id] : design[key].filter(id => id !== asset.id) })} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}{!referenceImages.length ? <p>{t('先到素材页导入参考图片')}</p> : null}</div>
-  const generateTitles = async () => {
-    setBusy('titles')
-    const dismiss = startProgressToast(t('正在推荐标题…'))
-    try { setTitles((await runCoverAction(item, 'cover/titles', {})).titles) }
+  const runTask = (kind, text, run) => runCoverTask(item.id, kind, async () => {
+    const dismiss = startProgressToast(text)
+    try { await run() }
     catch (err) { toast(err.message, { error: true }) }
-    finally { dismiss(); setBusy('') }
-  }
-  const generatePrompts = async () => {
-    setPromptError('')
-    setBusy('prompts')
-    const dismiss = startProgressToast(t('正在按 Skill 设计提示词…'))
-    try {
-      const result = await runCoverAction(item, 'cover/prompts', {})
-      update(d => ({ coverDesign: { ...d.coverDesign, variants: Object.fromEntries(COVER_RATIOS.map(r => [r, { ...d.coverDesign.variants[r], ...(result.variants[r] ? { prompt: result.variants[r] } : {}) }])) } }))
-      if (!result.variants[ratio]) setRatio(COVER_RATIOS.find(r => result.variants[r]) || ratio)
-      setImageError('')
-      toast(t('提示词已生成'))
-    } catch (err) { setPromptError(err.message) }
-    finally { dismiss(); setBusy('') }
-  }
-  const generateImage = async () => {
-    setImageError('')
-    setBusy('image')
-    const dismiss = startProgressToast(t('正在生成封面图…'))
-    try {
-      const result = await runCoverAction(item, 'cover/image', { ratio })
-      update(d => ({ coverDesign: { ...d.coverDesign, variants: { ...d.coverDesign.variants, [ratio]: { ...d.coverDesign.variants[ratio], imageIds: [...d.coverDesign.variants[ratio].imageIds, result.asset.id] } } }, edits: { ...d.edits, [result.asset.id]: { ...d.edits[result.asset.id], role: 'cover' } } }))
-      toast(t('封面已加入素材库，请检查文字、人物与比例'))
-    } catch (err) { setImageError(err.message) }
-    finally { dismiss(); setBusy('') }
-  }
+    finally { dismiss() }
+  })
+  const generateTitles = () => runTask('titles', t('正在推荐标题…'), async () => {
+    setTitles((await runCoverAction(item, 'cover/titles', {})).titles)
+  })
+  const generatePrompts = () => runTask('prompts', t('正在按 Skill 设计提示词…'), async () => {
+    const result = await runCoverAction(item, 'cover/prompts', {})
+    update(d => ({ coverDesign: { ...d.coverDesign, variants: Object.fromEntries(COVER_RATIOS.map(r => [r, { ...d.coverDesign.variants[r], ...(result.variants[r] ? { prompt: result.variants[r] } : {}) }])) } }))
+    if (!result.variants[ratio]) setRatio(COVER_RATIOS.find(r => result.variants[r]) || ratio)
+    toast(t('提示词已生成'))
+  })
+  const generateImage = ratios => runTask('image', t(ratios.length === 3 ? '正在同时生成三种比例的封面…' : '正在生成封面图…'), async () => {
+    const result = await generateCoverImages(ratios, body => runCoverAction(item, 'cover/image', body), { onResult: async result => {
+      // 旧 Host 只入库、不关联版本。逐张保存，后续失败/离开页面仍能恢复成功结果。
+      update(d => ({ coverDesign: { ...d.coverDesign, variants: { ...d.coverDesign.variants, ...Object.fromEntries(result.results.map(row => [row.ratio, { ...d.coverDesign.variants[row.ratio], imageIds: [row.asset.id] }])) } } }))
+      try { await flushWorkspace(item.id) }
+      catch (err) { throw new Error(t('图片已加入素材库，但封面关联保存失败：{reason}。请先重试保存，勿重复生成。', { reason: err.message })) }
+    } })
+    if (result.errors?.length) toast(t('已生成 {count} 张封面，其余比例失败：{details}', { count: result.results.length, details: result.errors.map(row => `${row.ratio}：${row.error}`).join('；') }), { error: true })
+    else toast(t('封面已加入素材库，请检查文字、人物与比例'))
+  })
   const designBrief = `使用 atutun-xhs-cover Skill。用户本次要求优先于默认模板。\n封面文字：${design.title}\n风格：${design.style}\n标题用色：${design.colors || '无固定用色'}\n本次要求：${design.requirements}\n目标比例：${design.ratios.join('、')}，每种比例独立构图。\n参考图按顺序上传：\n${[...design.personIds.map(id => [id, '人物']), ...design.materialIds.map(id => [id, '参考素材（按画面判断用途，不额外添加人物）']), ...design.colorIds.map(id => [id, '标题用色参考'])].map(([id, role], i) => `${i + 1}. ${role}：${images.find(a => a.id === id)?.name || ''}`).join('\n')}`
   const promptOnly = '只输出完整提示词，不调用生图工具。'
   const task = `${designBrief}\n\n${promptOnly}`
@@ -240,24 +237,25 @@ function CoverDesignPage({ item, draft, update, assets }) {
           <div className="md-cover-result-ratios" role="group" aria-label={t('封面版本')}>
             {COVER_RATIOS.map(r => {
               const hasResult = Boolean(design.variants[r].prompt.trim() || design.variants[r].imageIds.length)
-              return <button type="button" key={r} className={`md-btn is-small ${ratio === r ? 'is-primary' : ''}`} aria-pressed={ratio === r} aria-label={hasResult ? t('{ratio}，已有结果', { ratio: r }) : undefined} onClick={() => { setRatio(r); setImageError('') }}>{r}{hasResult ? <span className="md-cover-result-dot" aria-hidden="true" /> : null}</button>
+              return <button type="button" key={r} className={`md-btn is-small ${ratio === r ? 'is-primary' : ''}`} aria-pressed={ratio === r} aria-label={hasResult ? t('{ratio}，已有结果', { ratio: r }) : undefined} onClick={() => setRatio(r)}>{r}{hasResult ? <span className="md-cover-result-dot" aria-hidden="true" /> : null}</button>
             })}
           </div>
         </div>
         {latestCover ? renderCover(latestCover, true) : <div className="md-cover-no-result">
           <Icon name="image" size={20} /><div><strong>{t('还没有这个比例的成图')}</strong><p>{t(variant.prompt.trim() ? '提示词已就绪，可以生成封面图。' : '生成或粘贴提示词后，即可出图。')}</p></div>
         </div>}
-        {earlierCovers.length > 0 ? <details className="md-cover-history"><summary>{t('历史成图')} · {earlierCovers.length}</summary><div className="md-cover-generated">{earlierCovers.map(asset => renderCover(asset))}</div></details> : null}
         <div className="md-cover-prompt-output">
           <Field label="封面提示词"><textarea rows={4} value={variant.prompt} maxLength={50000} placeholder={t('使用 Skill 生成，或粘贴这个比例的完整提示词')} onChange={e => patchVariant({ prompt: e.target.value })} /></Field>
           <div className="md-cover-output-actions">
-            <button type="button" className="md-btn is-primary" disabled={!imageReady || !variant.prompt.trim()} onClick={generateImage}>{t(usesImageApi ? '用图片 API 生成封面' : '生成封面图')}</button>
+            <button type="button" className="md-btn is-primary" disabled={!imageReady || !variant.prompt.trim()} onClick={() => generateImage([ratio])}>{t(latestCover ? '重新生成当前比例（1 张）' : '生成当前比例（1 张）')}</button>
+            <button type="button" className="md-btn" disabled={!imageReady || !allPromptsReady} onClick={() => generateImage(COVER_RATIOS)}>{t(hasCovers ? '重新生成三种比例（3 张）' : '同时生成三种比例（3 张）')}</button>
             <button type="button" className="md-btn is-small" disabled={!variant.prompt} onClick={() => copy(variant.prompt)}>{t('复制提示词')}</button>
             <button type="button" className="md-btn is-small" disabled={!variant.prompt} onClick={() => downloadText(variant.prompt, `${design.title || item.title}-${ratio.replace(':', 'x')}.txt`)}>{t('导出提示词')}</button>
           </div>
+          <p className="md-cover-preview-note">{t('三种比例各生成一张：3:4、16:9、4:3。重新生成后展示新图，旧图保留在素材库。')} <button type="button" className="md-inline-link" onClick={() => setDesk({ studioTab: 'assets' })}>{t('查看素材库')}</button></p>
+          {!allPromptsReady ? <p className="md-cover-preview-note">{t('同时生成三张前，请先为三种比例生成或填写提示词。')}</p> : null}
           {usesImageApi && imageReady ? <p className="md-cover-preview-note">{t('使用 API 设置中的模型：{model}', { model: imageSettings.model })}</p> : null}
           {!imageReady ? <p className="md-cover-preview-note">{t('请先在 API 设置中配置生图来源。')} <button type="button" className="md-inline-link" onClick={() => setDesk({ settingsOpen: true })}>{t('设置')}</button></p> : null}
-          {imageError ? <p className="md-cover-prompt-error" role="alert">{imageError}</p> : null}
         </div>
       </section>
       <section className="md-work-panel md-cover-simple-brief" aria-labelledby="md-cover-brief-heading">
@@ -274,7 +272,7 @@ function CoverDesignPage({ item, draft, update, assets }) {
           }} /><img src={asset.src} alt="" loading="lazy" /></label>)}</div> : <p className="md-cover-ref-hint">{t('选填，支持截图或素材图')}</p>}
         </div>
         <details className="md-cover-options"><summary>{t('更多设置（选填）')}</summary>
-          <Field label="封面风格"><select value={design.style} onChange={e => patch({ style: e.target.value })}>{COVER_STYLES.map(style => <option key={style} value={style}>{t(style)}</option>)}</select></Field>
+          <Field label="封面风格"><SelectControl value={design.style} onChange={e => patch({ style: e.target.value })}>{COVER_STYLES.map(style => <option key={style} value={style}>{t(style)}</option>)}</SelectControl></Field>
           <Field label="标题用色"><input value={design.colors} placeholder={t('留空，交给 Skill 搭配')} onChange={e => patch({ colors: e.target.value })} /></Field>
           <Field label="生成比例"><div className="md-cover-ratios">{COVER_RATIOS.map(r => <label key={r}><input type="checkbox" checked={design.ratios.includes(r)} onChange={e => patch({ ratios: e.target.checked ? [...design.ratios, r] : design.ratios.filter(x => x !== r) })} />{r}</label>)}</div></Field>
           <details><summary>{t('指定人物参考')}</summary>{selectImages('personIds')}</details>
@@ -284,7 +282,6 @@ function CoverDesignPage({ item, draft, update, assets }) {
           {model ? <><button type="button" className="md-btn is-primary" disabled={!design.title.trim() || !design.ratios.length} onClick={generatePrompts}><Icon name="image" size={15} />{t(busy === 'prompts' ? '正在生成封面提示词…' : '生成封面提示词')}</button><button type="button" className="md-btn" disabled={!design.title.trim()} onClick={() => copy(task)}>{t('复制到 Skill 对话')}</button></> : <button type="button" className="md-btn is-primary" disabled={!design.title.trim()} onClick={() => copy(task)}><Icon name="copy" size={15} />{t('复制到 Skill 对话')}</button>}
           <span>{design.ratios.join(' · ')}</span>
         </footer>
-        {promptError ? <p className="md-cover-prompt-error" role="alert">{promptError}</p> : null}
         {!model ? <p className="md-cover-preview-note">{t('这里暂未连接模型。复制后，粘贴到你平时的 Skill 对话，并附上选中的参考图即可。')}</p> : null}
       </section>
     </div>
@@ -292,7 +289,7 @@ function CoverDesignPage({ item, draft, update, assets }) {
       <div className="md-work-panel-title"><div className="md-cover-illustration-heading"><h3>{t('正文配图')}</h3><span>{illustrations.length} {t('张配图')}</span></div><button type="button" className="md-btn is-small" disabled={illustrations.length >= 50} onClick={() => update(d => ({ coverDesign: { ...d.coverDesign, illustrations: [...(d.coverDesign.illustrations || []), { id: crypto.randomUUID(), title: `配图 ${(d.coverDesign.illustrations || []).length + 1}`, requirements: '', prompt: '', ratio: '3:4', imageIds: [] }] } }))}><Icon name="plus" size={13} />{t('添加配图')}</button></div>
       {!illustrations.length ? <p className="md-cover-preview-note">{t('添加讲解图、步骤图或组合拼图，和封面一起交给 Skill 设计。')}</p> : null}
       {illustrations.map(row => <details key={row.id} className="md-illustration" open><summary>{row.title || t('未命名配图')} · {row.ratio}</summary>
-        <div className="md-illustration-fields"><Field label="配图名称"><input value={row.title} maxLength={2000} onChange={e => patchIllustration(row.id, { title: e.target.value })} /></Field><Field label="比例"><select value={row.ratio} onChange={e => patchIllustration(row.id, { ratio: e.target.value })}>{COVER_RATIOS.map(r => <option key={r}>{r}</option>)}</select></Field></div>
+        <div className="md-illustration-fields"><Field label="配图名称"><input value={row.title} maxLength={2000} onChange={e => patchIllustration(row.id, { title: e.target.value })} /></Field><Field label="比例"><SelectControl value={row.ratio} onChange={e => patchIllustration(row.id, { ratio: e.target.value })}>{COVER_RATIOS.map(r => <option key={r}>{r}</option>)}</SelectControl></Field></div>
         <Field label="画面要求"><textarea rows={2} value={row.requirements} maxLength={20000} placeholder={t('例如：将三种角色对比组合为一张配图；用于正文第二段，保持封面配色')} onChange={e => patchIllustration(row.id, { requirements: e.target.value })} /></Field>
         <Field label="配图提示词"><textarea rows={5} value={row.prompt} maxLength={50000} placeholder={t('粘贴这张配图的完整提示词，自动保存')} onChange={e => patchIllustration(row.id, { prompt: e.target.value })} /></Field>
         <details className="md-illustration-results"><summary>{t('关联成图')} · {row.imageIds.length}</summary><div className="md-cover-reference-grid">{images.map(asset => <label key={asset.id}><input type="checkbox" checked={row.imageIds.includes(asset.id)} onChange={e => patchIllustration(row.id, { imageIds: e.target.checked ? [...row.imageIds, asset.id] : row.imageIds.filter(id => id !== asset.id) })} /><img src={asset.src} alt="" /><span>{asset.name}</span></label>)}</div><button type="button" className="md-btn is-small" onClick={() => fileInput.current?.click()}>{t('上传成图')}</button></details>
@@ -335,7 +332,10 @@ function PromptPage({ item, draft, update, assets }) {
       <aside className="md-work-panel md-prompt-document-outline" aria-label={t('分段目录')}>
         <div className="md-work-panel-title"><h3>{t('分段目录')}</h3><span>{document.sections.length} {t('段')} · {Number(document.seconds.toFixed(3))}s</span></div>
         {document.sections.length ? <><nav>{document.sections.map((row, index) => <button type="button" key={row.start} aria-pressed={active === index} className={active === index ? 'is-on' : ''} onClick={() => jump(index)}><strong>{row.label}</strong><span>{row.shots} {t('镜头')}</span></button>)}</nav>
-        <button type="button" className="md-btn is-wide" disabled={!section} onClick={() => copy(copyVideoPromptSection(text, active))}><Icon name="copy" size={14} />{t('复制全局参数＋当前段')}</button><p>{t('点击目录定位原文；复制时自动带上全局参数')}</p></> : <p>{t('使用【第1段 - 13.3秒】这样的标题即可自动识别目录，其他格式仍可完整保存')}</p>}
+        <div className="md-work-actions">
+          <button type="button" className="md-btn is-wide" disabled={!section} onClick={() => copy(copyVideoPromptSection(text, active))}><Icon name="copy" size={14} />{t('复制全局参数＋当前段')}</button>
+          <button type="button" className="md-btn is-wide" disabled={!section} onClick={() => copy(section.text.trimEnd())}><Icon name="copy" size={14} />{t('仅复制当前段落')}</button>
+        </div><p>{t('点击目录选择段落，可连同全局参数或仅复制当前段落')}</p></> : <p>{t('使用【第1段 - 13.3秒】这样的标题即可自动识别目录，其他格式仍可完整保存')}</p>}
         <details className="md-prompt-file-references"><summary>{t('参考素材')} · {assets.length}</summary><p>{t('在素材页管理参考文件，复制提示词后在视频工具中上传')}</p></details>
       </aside>
     </div>
@@ -374,11 +374,11 @@ function AssetsPage({ item, draft, update, assets, persistence }) {
     <div className={`md-asset-browser ${dragging ? 'is-dragover' : ''}`} onDragOver={e => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true) } }} onDragLeave={e => { if (!e.currentTarget.contains(e.relatedTarget)) setDragging(false) }} onDrop={e => { e.preventDefault(); setDragging(false); importFiles([...e.dataTransfer.files]) }}>
       <aside className="md-asset-sidebar"><span className="md-section-kicker">{t('内容文件夹')}</span><nav aria-label={t('素材分类')}>{TYPES.map(type => <React.Fragment key={type.id}><button type="button" className={!recycleView && filter === type.id && !folder ? 'is-on' : ''} aria-pressed={!recycleView && filter === type.id && !folder} onClick={() => { setFilter(type.id); setFolder(''); setRecycleView(false) }}><Icon name={type.icon} size={16} /><span>{t(type.name)}</span><small>{assets.filter(a => type.id === 'all' || a.type === type.id).length}</small></button>{draft.folders.filter(f => f.type === type.id).map(row => <button type="button" className={`md-asset-subfolder ${folder === row.id ? 'is-on' : ''}`} key={row.id} onClick={() => { setFilter(type.id); setFolder(row.id); setRecycleView(false) }}><Icon name="folder" size={14} /><span>{row.name}</span><small>{assets.filter(a => a.folder === row.id).length}</small></button>)}</React.Fragment>)}<button type="button" className={recycleView ? 'is-on' : ''} onClick={() => { setRecycleView(true); setFolder('') }}><Icon name="trash" size={16} /><span>{t('回收站')}</span><small>{recycled.length}</small></button></nav><button type="button" className="md-new-folder" onClick={addFolder}><Icon name="plus" size={14} />{t('新建文件夹')}</button><div className="md-asset-sidebar-note"><Icon name="link" size={15} /><p>{t('文件跟随这篇内容，选好成片和封面就能准备发布')}</p></div></aside>
       <div className="md-asset-main"><div className="md-asset-toolbar"><span>{t('素材')}<Icon name="chevR" size={12} /><strong>{recycleView ? t('回收站') : folder ? draft.folders.find(f => f.id === folder)?.name : t(TYPES.find(row => row.id === filter).name)}</strong></span><div>{folder ? <IconButton icon="edit" label={t('重命名文件夹')} onClick={renameFolder} /> : null}<label className="md-search"><Icon name="search" size={14} /><input aria-label={t('搜索素材')} placeholder={t('搜索素材')} value={query} onChange={e => setQuery(e.target.value)} /></label><Segmented label={t('素材显示方式')} value={mode} onChange={setMode} options={[{ value: 'grid', icon: 'wall', title: t('网格') }, { value: 'list', icon: 'list', title: t('列表') }]} /></div></div>
-        <div className={`md-assets ${mode === 'list' ? 'is-list' : ''}`}>{visible.map(asset => <article className="md-asset-card" key={asset.id}><button type="button" className={`md-asset-thumbnail is-${asset.type}`} onClick={() => setViewing(asset)} aria-label={t('预览 {name}', { name: asset.name })}>{asset.type === 'image' ? <img src={asset.src} alt="" loading="lazy" /> : asset.type === 'video' ? <>{asset.poster ? <img src={asset.poster} alt="" loading="lazy" /> : <video src={asset.src} preload="metadata" muted />}<span className="md-media-play"><Icon name="play" size={18} fill /></span></> : <div className="md-audio-art"><Icon name="play" size={28} /><span>{t('音频文件')}</span></div>}<span className="md-file-extension">{asset.name.includes('.') ? asset.name.split('.').pop().slice(0, 5).toUpperCase() : asset.type.toUpperCase()}</span></button><div className="md-asset-caption"><button type="button" onClick={() => setViewing(asset)} title={asset.name}>{asset.name}</button><div><span>{draft.selectedVideo === asset.id ? t('已选发布视频') : draft.selectedCover === asset.id ? t('已选发布封面') : draft.imageIds.includes(asset.id) ? t('已选发布图片') : t(ROLE_NAMES[asset.role] || '制作素材')}</span><small>{mediaInfo(asset)}</small></div></div><div className="md-asset-card-actions">{recycleView ? <IconButton icon="undo" label={t('恢复素材')} onClick={() => restore(asset)} /> : <IconButton icon="edit" label={t('整理素材')} onClick={() => editAsset(asset)} />}<IconButton icon="more" label={t('查看素材详情')} onClick={() => setViewing(asset)} /></div>{draft.selectedVideo === asset.id || draft.selectedCover === asset.id || draft.imageIds.includes(asset.id) ? <span className="md-asset-selected"><Icon name="check" size={12} /></span> : null}</article>)}{!query && !recycleView ? <button type="button" className="md-asset-import" onClick={() => fileInput.current?.click()}><Icon name="plus" size={24} /><strong>{t('拖入或导入素材')}</strong><span>{t('视频、图片和音频')}</span></button> : null}</div>
+        <div className={`md-assets ${mode === 'list' ? 'is-list' : ''}`}>{visible.map(asset => <article className="md-asset-card" key={asset.id}><button type="button" className={`md-asset-thumbnail is-${asset.type}`} onClick={() => setViewing(asset)} aria-label={t('预览 {name}', { name: asset.name })}>{asset.type === 'image' ? <img src={asset.src} alt="" loading="lazy" /> : asset.type === 'video' ? <>{asset.poster ? <img src={asset.poster} alt="" loading="lazy" /> : <video src={asset.src} preload="metadata" muted />}<span className="md-media-play"><Icon name="play" size={18} fill /></span></> : <div className="md-audio-art"><Icon name="play" size={28} /><span>{t('音频文件')}</span></div>}<span className="md-file-extension">{asset.name.includes('.') ? asset.name.split('.').pop().slice(0, 5).toUpperCase() : asset.type.toUpperCase()}</span></button><div className="md-asset-caption"><button type="button" onClick={() => setViewing(asset)} title={asset.name}>{asset.name}</button><div><span>{draft.selectedVideo === asset.id ? t('已选发布视频') : selectedCoverIds(draft).includes(asset.id) ? t('已选发布封面') : draft.imageIds.includes(asset.id) ? t('已选发布图片') : t(ROLE_NAMES[asset.role] || '制作素材')}{asset.role === 'cover' && coverAssetRatio(asset) ? ` · ${coverAssetRatio(asset)}` : ''}</span><small>{mediaInfo(asset)}</small></div></div><div className="md-asset-card-actions">{recycleView ? <IconButton icon="undo" label={t('恢复素材')} onClick={() => restore(asset)} /> : <IconButton icon="edit" label={t('整理素材')} onClick={() => editAsset(asset)} />}<IconButton icon="more" label={t('查看素材详情')} onClick={() => setViewing(asset)} /></div>{draft.selectedVideo === asset.id || selectedCoverIds(draft).includes(asset.id) || draft.imageIds.includes(asset.id) ? <span className="md-asset-selected"><Icon name="check" size={12} /></span> : null}</article>)}{!query && !recycleView ? <button type="button" className="md-asset-import" onClick={() => fileInput.current?.click()}><Icon name="plus" size={24} /><strong>{t('拖入或导入素材')}</strong><span>{t('视频、图片和音频')}</span></button> : null}</div>
         {(query || recycleView) && !visible.length ? <div className="md-work-empty"><Icon name="search" size={28} /><h3>{t('没有找到素材')}</h3><p>{t('换一个关键词，或查看其他文件夹')}</p><button type="button" className="md-btn" onClick={() => { setQuery(''); setFilter('all'); setFolder(''); setRecycleView(false) }}>{t('查看全部素材')}</button></div> : null}<footer className="md-asset-browser-foot"><span>{t('{n} 个文件', { n: visible.length })}</span><span>{t('直接拖入文件即可导入')}</span></footer>
       </div>{dragging ? <div className="md-asset-drop"><Icon name="upload" size={32} /><strong>{t('松开，放进这篇内容')}</strong></div> : null}
     </div>
-    {viewing ? <Dialog title={viewing.name} onClose={() => setViewing(null)} width={760}><div className="md-asset-viewer">{viewing.type === 'image' ? <img src={viewing.src} alt={viewing.name} /> : viewing.type === 'video' ? <video src={viewing.src} poster={viewing.poster} controls autoPlay /> : <audio src={viewing.src} controls autoPlay />}<div className="md-asset-detail"><span>{t(ROLE_NAMES[viewing.role] || '制作素材')} · {mediaInfo(viewing)}</span><span>{viewing.origin === 'imported' ? t('已保存到本地') : t('内容素材')}</span></div>{viewing.metadataWarning ? <p className="md-media-warning">{t(viewing.metadataWarning)}</p> : null}<div className="md-work-actions">{recycleView ? <button type="button" className="md-btn is-primary" onClick={() => restore(viewing)}>{t('恢复素材')}</button> : viewing.type === 'video' ? <button type="button" className="md-btn is-primary" onClick={() => { update({ selectedVideo: viewing.id }); setViewing(null) }}>{t('设为发布视频')}</button> : viewing.type === 'image' ? <><button type="button" className="md-btn is-primary" onClick={() => { update({ selectedCover: viewing.id }); setViewing(null) }}>{t('设为发布封面')}</button><button type="button" className="md-btn" onClick={() => { update(d => ({ imageIds: d.imageIds.includes(viewing.id) ? d.imageIds.filter(id => id !== viewing.id) : [...d.imageIds, viewing.id] })); setViewing(null) }}>{draft.imageIds.includes(viewing.id) ? t('取消发布图片') : t('加入发布图片')}</button></> : null}<a className="md-btn" href={viewing.src} download={viewing.name}>{t('下载')}</a><span className="md-grow" />{!recycleView ? <button type="button" className="md-btn" onClick={() => remove(viewing)}>{t('移到回收站')}</button> : null}</div></div></Dialog> : null}
+    {viewing ? <Dialog title={viewing.name} onClose={() => setViewing(null)} width={760}><div className="md-asset-viewer">{viewing.type === 'image' ? <img src={viewing.src} alt={viewing.name} /> : viewing.type === 'video' ? <video src={viewing.src} poster={viewing.poster} controls autoPlay /> : <audio src={viewing.src} controls autoPlay />}<div className="md-asset-detail"><span>{t(ROLE_NAMES[viewing.role] || '制作素材')}{viewing.role === 'cover' && coverAssetRatio(viewing) ? ` · ${coverAssetRatio(viewing)}` : ''} · {mediaInfo(viewing)}</span><span>{viewing.origin === 'imported' ? t('已保存到本地') : t('内容素材')}</span></div>{viewing.metadataWarning ? <p className="md-media-warning">{t(viewing.metadataWarning)}</p> : null}<div className="md-work-actions">{recycleView ? <button type="button" className="md-btn is-primary" onClick={() => restore(viewing)}>{t('恢复素材')}</button> : viewing.type === 'video' ? <button type="button" className="md-btn is-primary" onClick={() => { update({ selectedVideo: viewing.id }); setViewing(null) }}>{t('设为发布视频')}</button> : viewing.type === 'image' ? <><button type="button" className="md-btn is-primary" onClick={() => { update(d => selectPublishCover(d, viewing)); setViewing(null) }}>{t('设为发布封面')}</button><button type="button" className="md-btn" onClick={() => { update(d => ({ imageIds: d.imageIds.includes(viewing.id) ? d.imageIds.filter(id => id !== viewing.id) : [...d.imageIds, viewing.id] })); setViewing(null) }}>{draft.imageIds.includes(viewing.id) ? t('取消发布图片') : t('加入发布图片')}</button></> : null}<a className="md-btn" href={viewing.src} download={viewing.name}>{t('下载')}</a><span className="md-grow" />{!recycleView ? <button type="button" className="md-btn" onClick={() => remove(viewing)}>{t('移到回收站')}</button> : null}</div></div></Dialog> : null}
   </div>
 }
 
@@ -394,6 +394,7 @@ export function PublishPage({ item, draft, update, assets, onTab, syncPublish, i
   const publishing = usePublishing(item.id, publish.platform, apiMode)
   const video = assets.find(a => a.id === draft.selectedVideo)
   const cover = assets.find(a => a.id === draft.selectedCover)
+  const covers = selectedCoverIds(draft).map(id => assets.find(asset => asset.id === id)).filter(Boolean)
   const articleImages = publish.format === 'article' || (!browserMode && publishUsesArticleImages(publishing.platform, publish.format))
   const images = (articleImages ? articleImageIds(publish.description) : draft.imageIds).map(id => assets.find(a => a.id === id)).filter(Boolean)
   const patch = values => update(d => ({ publish: { ...d.publish, ...values } }))
@@ -401,10 +402,10 @@ export function PublishPage({ item, draft, update, assets, onTab, syncPublish, i
   const maitianBundle = useMaitianBundle({ item, draft, update, assets, publishing })
   const useCover = publish.format !== 'text' && (step === 'prepare' || (!browserMode && (!apiMode || !publishing.platform || publishUsesCover(publishing.platform, publish.format))))
   const browserCoverId = ['3x4', '4x3', '16x9'].map(ratio => publish.browser?.covers?.[ratio]).find(Boolean)
-  const previewCover = browserMode ? (assets.find(asset => asset.id === browserCoverId) || cover) : useCover ? cover : null
+  const previewCover = browserMode ? (cover || assets.find(asset => asset.id === browserCoverId)) : useCover ? cover : null
   const manualPackage = () => {
-    const covers = browserMode ? [...new Set(Object.values(publish.browser?.covers || {}))].map(id => assets.find(asset => asset.id === id)) : useCover ? [cover] : []
-    const selected = [...(publish.format === 'video' ? [video] : publish.format === 'images' || articleImages ? images : []), ...covers].filter(Boolean)
+    const chosenCovers = browserMode ? [...new Set([...covers.map(asset => asset.id), ...Object.values(publish.browser?.covers || {})])].map(id => assets.find(asset => asset.id === id)) : useCover ? covers : []
+    const selected = [...(publish.format === 'video' ? [video] : publish.format === 'images' || articleImages ? images : []), ...chosenCovers].filter(Boolean)
     const text = `# ${publish.title}\n\n${publish.description}\n\n${publish.tags}\n\n## ${t('发布素材')}\n\n${selected.map(a => `- ${a.name}`).join('\n')}\n\n${t('发布清单仅包含文案和文件名，请在素材页下载对应文件')}`
     downloadText(text, `${item.title}-publish.md`, 'text/markdown')
   }
@@ -432,8 +433,8 @@ export function PublishPage({ item, draft, update, assets, onTab, syncPublish, i
           <Field label="正文 / 简介"><textarea rows={6} value={publish.description} placeholder={t('写下这一版要发布的正文')} onChange={e => patch({ description: e.target.value })} /></Field>
           <Field label="话题"><input value={publish.tags} placeholder={t('#话题一 #话题二')} onChange={e => patch({ tags: e.target.value })} /></Field>
           <div className="md-publish-media-select">
-            {publish.format === 'video' ? <Field label="发布视频"><select value={draft.selectedVideo} onChange={e => update({ selectedVideo: e.target.value })}><option value="">{t('选择一个完整成片')}</option>{assets.filter(a => a.type === 'video').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : publish.format === 'images' ? <div className="md-publish-images"><span>{t('发布图片（按选择顺序）')}</span>{assets.filter(a => a.type === 'image').map(a => <label key={a.id}><input type="checkbox" checked={draft.imageIds.includes(a.id)} onChange={e => update(d => ({ imageIds: e.target.checked ? [...d.imageIds, a.id] : d.imageIds.filter(id => id !== a.id) }))} /><span>{draft.imageIds.includes(a.id) ? `${draft.imageIds.indexOf(a.id) + 1}. ` : ''}{a.name}</span></label>)}</div> : null}
-            {publish.format !== 'text' ? <Field label="发布封面"><select value={draft.selectedCover} onChange={e => update({ selectedCover: e.target.value })}><option value="">{t('选择封面图片')}</option>{assets.filter(a => a.type === 'image').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select></Field> : null}
+            {publish.format === 'video' ? <Field label="发布视频"><SelectControl value={draft.selectedVideo} onChange={e => update({ selectedVideo: e.target.value })}><option value="">{t('选择一个完整成片')}</option>{assets.filter(a => a.type === 'video').map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</SelectControl></Field> : publish.format === 'images' ? <div className="md-publish-images"><span>{t('发布图片（按选择顺序）')}</span>{assets.filter(a => a.type === 'image').map(a => <label key={a.id}><input type="checkbox" checked={draft.imageIds.includes(a.id)} onChange={e => update(d => ({ imageIds: e.target.checked ? [...d.imageIds, a.id] : d.imageIds.filter(id => id !== a.id) }))} /><span>{draft.imageIds.includes(a.id) ? `${draft.imageIds.indexOf(a.id) + 1}. ` : ''}{a.name}</span></label>)}</div> : null}
+            {publish.format !== 'text' ? <Field label="发布封面"><SelectControl multiple searchable placeholder={t('选择封面图片（可多选）')} value={covers.map(asset => asset.id)} options={coverSelectOptions(assets)} onChange={e => update(d => selectPublishCovers(d, e.target.value.map(id => assets.find(asset => asset.id === id)).filter(Boolean)))} /><small>{t('可选择多张封面，第一张用于默认预览；发布时按比例使用，同一比例使用最后选择的一张。')}</small></Field> : null}
           </div>
         </section>
         {publish.format === 'article' ? <ArticleImagePicker assets={assets} onInsert={marker => patch({ description: `${publish.description.trimEnd()}\n\n${marker}\n\n` })} /> : null}

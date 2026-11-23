@@ -1,4 +1,4 @@
-import { sanitizeCoverDesign } from './cover-design-schema.js'
+import { COVER_RATIOS, sanitizeCoverDesign } from './cover-design-schema.js'
 import { contentAssetDirectory } from './asset-storage.js'
 import { assertUploadRoot, withAssetUpload } from './asset-upload.js'
 import { MEDIA_MIME } from './asset-rules.js'
@@ -82,7 +82,7 @@ export function currentWorkspace(item) {
 }
 
 function expectRevision(ws, revision) {
-  if (!Number.isInteger(revision) || revision !== ws.revision) throw fail('内容已在其他窗口更新，请重新加载后再保存', 409)
+  if (!Number.isInteger(revision) || revision !== ws.revision) throw fail('工作区版本已更新，请合并或重新加载后再保存', 409)
 }
 
 export class ContentAssets {
@@ -122,6 +122,9 @@ export class ContentAssets {
         if (!ws.trash.some(row => row.assetId === assetId)) ws.trash.push({ assetId, deletedAt: new Date().toISOString() })
         if (ws.selectedVideo === assetId) ws.selectedVideo = ''
         if (ws.selectedCover === assetId) ws.selectedCover = ''
+        ws.selectedCoverIds = ws.selectedCoverIds.filter(id => id !== assetId)
+        ws.selectedCover ||= ws.selectedCoverIds[0] || ''
+        if (ws.publish?.browser?.covers) ws.publish.browser.covers = Object.fromEntries(Object.entries(ws.publish.browser.covers).filter(([, id]) => id !== assetId))
         ws.imageIds = ws.imageIds.filter(value => value !== assetId)
         ws.promptSettings.referenceIds = ws.promptSettings.referenceIds.filter(value => value !== assetId)
         const src = ws.assets.find(a => a.id === assetId).src
@@ -134,14 +137,19 @@ export class ContentAssets {
     }, { undoable: false })
   }
 
-  async import(id, stream, { name, folder = '', relativePath = '', revision, coverResult = false } = {}) {
+  async import(id, stream, { name, folder = '', relativePath = '', revision, coverResult = false, coverRatio, mergeCoverResult = false } = {}) {
+    if (coverRatio !== undefined && !COVER_RATIOS.includes(coverRatio)) throw fail('封面比例无效')
     const ext = extname(String(name)).toLowerCase()
     const type = typeFor(ext)
     if (!type) throw fail('不支持的媒体文件类型', 415)
+    // 仅供已通过初始修订检查的内部生图任务使用，HTTP 上传不开放此选项。
+    // 生图期间允许编辑，入库在写锁内只追加文件和关联，不保存旧的整份草稿。
+    const mergeCover = mergeCoverResult === true && type === 'image' && COVER_RATIOS.includes(coverRatio)
     const cleanName = basename(String(name).replaceAll('\\', '/')).replace(/[\x00-\x1f]/g, '').slice(0, 240)
     if (!cleanName || cleanName.startsWith('.')) throw fail('文件名无效')
     return withAssetUpload(this.store, async ({ root, dir, token, state }) => {
-      expectRevision(currentWorkspace(getItem(state, id)), revision)
+      const initial = currentWorkspace(getItem(state, id))
+      if (!mergeCover) expectRevision(initial, revision)
       const filename = `asset_${token}${ext}`
       const posterName = `asset_${token}-poster.jpg`
       const pending = join(dir, filename)
@@ -160,7 +168,11 @@ export class ContentAssets {
       const metadata = await this.inspect(pending, type, type === 'video' ? pendingPoster : null)
       const src = `media-desk/files/${id}/${filename}`
       const asset = { id: fileId(src), src, name: cleanName, type, role: 'source', folder: '', origin: 'imported', bytes, sha256: hash.digest('hex'), importedAt: new Date().toISOString(), relativePath: String(relativePath).replaceAll('\\', '/').split('/').filter(p => p && p !== '.' && p !== '..').join('/').slice(0, 1000), ...metadata }
-      if (coverResult === true && type === 'image') asset.coverResult = true
+      if ((coverResult === true || coverRatio) && type === 'image') {
+        asset.coverResult = true
+        asset.role = 'cover'
+        if (coverRatio) asset.coverRatio = coverRatio
+      }
       const hasPoster = asset.hasPoster
       if (hasPoster) asset.poster = `media-desk/files/${id}/${posterName}`
       delete asset.hasPoster
@@ -170,7 +182,7 @@ export class ContentAssets {
           assertUploadRoot(this.store, root)
           const item = getItem(state, id)
           const ws = currentWorkspace(item)
-          expectRevision(ws, revision)
+          if (!mergeCover) expectRevision(ws, revision)
           if (ws.assets.length >= 2000) throw fail('这篇内容的素材数量已达上限')
           if (folder && ws.folders.some(f => f.id === folder && f.type === type)) asset.folder = folder
           else if (asset.relativePath.includes('/')) {
@@ -193,6 +205,17 @@ export class ContentAssets {
             moved.push(poster)
           }
           ws.assets.push(asset)
+          if (coverRatio && type === 'image') {
+            // 旧图仍在素材库；当前画幅只指向本轮结果，关联和文件入库一次保存。
+            const variant = ws.coverDesign.variants[coverRatio]
+            for (const previous of ws.assets) {
+              if (variant.imageIds.includes(previous.id)) {
+                previous.coverResult = true
+                previous.coverRatio ||= coverRatio
+              }
+            }
+            variant.imageIds = [asset.id]
+          }
           ws.revision++
           ws.updatedAt = new Date().toISOString()
           item.workspace = ws

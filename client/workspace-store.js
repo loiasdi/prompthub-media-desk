@@ -1,9 +1,30 @@
 // 每篇内容独立的保存队列：编辑、导入和回收站操作不会互相覆盖。
 import { lang, t } from './i18n.js'
+import { selectedCoverIds } from '../src/cover-assets.js'
 import { sourceAssets } from '../src/workspace-schema.js'
+import { normalizeCoverImageResult } from './cover-generation.js'
 
 function mergeAssets(...lists) {
   return [...new Map(lists.flat().map(asset => [asset.id, asset])).values()]
+}
+
+const clone = value => structuredClone(value)
+const same = (left, right) => JSON.stringify(left) === JSON.stringify(right)
+
+function mergeWorkspace(base, local, remote) {
+  if (same(local, base)) return clone(remote)
+  if (same(remote, base) || same(local, remote)) return clone(local)
+  if (!local || !remote || typeof local !== 'object' || typeof remote !== 'object' || Array.isArray(local) || Array.isArray(remote)) return clone(local)
+  const result = {}
+  for (const key of new Set([...Object.keys(base || {}), ...Object.keys(local), ...Object.keys(remote)])) {
+    const value = mergeWorkspace(base?.[key], local[key], remote[key])
+    if (value !== undefined) result[key] = value
+  }
+  if (Array.isArray(local.assets) && Array.isArray(remote.assets)) result.assets = mergeAssets(remote.assets, local.assets)
+  if (Array.isArray(local.folders) && Array.isArray(remote.folders)) {
+    result.folders = [...new Map([...remote.folders, ...local.folders].map(row => [row.id, row])).values()]
+  }
+  return result
 }
 
 async function request(path, body) {
@@ -43,6 +64,7 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
   const listeners = new Set()
   const timers = new Map()
   const queues = new Map()
+  const coverTasks = new Map()
   const controllers = new Map()
   const checkedAssets = new Map()
   const emit = () => listeners.forEach(fn => fn())
@@ -51,13 +73,14 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
     let entry = entries.get(item.id)
     if (!entry) {
       const draft = { ...create(item), ...item.workspace }
-      entry = { item, draft, revision: item.workspace?.revision || 0, version: 0, savedVersion: 0, status: 'saved', error: '', conflict: false, imports: [], importing: false }
+      entry = { item, draft, savedDraft: clone(draft), revision: item.workspace?.revision || 0, version: 0, savedVersion: 0, status: 'saved', error: '', conflict: false, imports: [], importing: false }
       entries.set(item.id, entry)
     } else {
       // item 不是快照的一部分，否则父组件每次刷新会使订阅快照不稳定。
       entry.item = item
       if (item.workspace?.revision > entry.revision && entry.version === entry.savedVersion && !entry.importing && entry.status !== 'saving') {
-        entry = { ...entry, revision: item.workspace.revision, draft: { ...create(item), ...item.workspace }, error: '', conflict: false }
+        const draft = { ...create(item), ...item.workspace }
+        entry = { ...entry, revision: item.workspace.revision, draft, savedDraft: clone(draft), error: '', conflict: false }
         entries.set(item.id, entry)
       }
     }
@@ -89,7 +112,7 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
       folders: [...new Map([...workspace.folders, ...entry.draft.folders].map(row => [row.id, row])).values()],
       revision: workspace.revision,
     } : workspace
-    set(id, { draft, revision: workspace.revision, savedVersion: version, status: dirty ? 'pending' : 'saved', error: '', conflict: false })
+    set(id, { draft, savedDraft: clone(workspace), revision: workspace.revision, savedVersion: version, status: dirty ? 'pending' : 'saved', error: '', conflict: false })
   }
   const saveNow = async id => {
     while (entries.get(id).version !== entries.get(id).savedVersion) {
@@ -115,6 +138,10 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
         if (submitted.coverDesign && JSON.stringify(workspace.coverDesign) !== JSON.stringify(submitted.coverDesign)) {
           set(id, { revision: workspace.revision })
           throw new Error(t('服务端未完整保存封面设计，已保留输入。请更新或重启服务后重试保存'))
+        }
+        if (JSON.stringify(selectedCoverIds(submitted)) !== JSON.stringify(selectedCoverIds(workspace))) {
+          set(id, { revision: workspace.revision })
+          throw new Error(t('服务端未完整保存封面多选，已保留选择。请更新或重启服务后重试保存'))
         }
         adopt(id, workspace, version)
       } catch (err) {
@@ -148,6 +175,24 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
       }
     })
   }
+  const rebase = id => enqueue(id, async () => {
+    clearTimeout(timers.get(id))
+    const version = entries.get(id).version
+    try {
+      const { workspace } = await api(`workspace?id=${encodeURIComponent(id)}`)
+      const current = entries.get(id)
+      if (current.version !== version) throw Object.assign(new Error(t('重新合并期间有新修改，已保留草稿，请重试')), { status: 409 })
+      const merged = mergeWorkspace(current.savedDraft, current.draft, workspace)
+      merged.revision = workspace.revision
+      merged.assets = mergeAssets(workspace.assets, current.draft.assets, sourceAssets(current.item))
+      const dirty = current.version !== current.savedVersion
+      set(id, { draft: merged, savedDraft: clone(workspace), revision: workspace.revision, savedVersion: dirty ? current.savedVersion : current.version, status: dirty ? 'pending' : 'saved', error: '', conflict: false })
+      if (dirty) await saveNow(id)
+    } catch (err) {
+      set(id, { status: 'error', error: err.message, conflict: err.status === 409 })
+      throw err
+    }
+  })
   const recycle = (id, assetId, restore = false) => enqueue(id, async () => {
     await saveNow(id)
     const entry = entries.get(id)
@@ -202,19 +247,36 @@ export function createWorkspaceStore({ create, resolve, patch, api = request, up
     })
   }
   const action = (id, path, body) => enqueue(id, async () => {
-    await saveNow(id)
-    const entry = entries.get(id)
-    const result = await api(path, { ...body, id, revision: entry.revision })
-    if (result.workspace) adopt(id, result.workspace, entry.version)
-    return result
+    try {
+      await saveNow(id)
+      const entry = entries.get(id)
+      let result = await api(path, { ...body, id, revision: entry.revision })
+      if (path === 'cover/image') result = normalizeCoverImageResult(result, body.ratios ?? [body.ratio], { revision: entry.revision })
+      if (result.workspace) adopt(id, result.workspace, entry.version)
+      return result
+    } catch (err) {
+      if (err.status === 409) set(id, { status: 'error', error: err.message, conflict: true })
+      throw err
+    }
   })
+  // 生成跨页面持续进行；切换标签、返回内容或连续点击不能再次排入付费任务。
+  const coverTask = (id, kind, run) => {
+    if (coverTasks.has(id)) return coverTasks.get(id)
+    const task = Promise.resolve().then(run).finally(() => {
+      coverTasks.delete(id)
+      set(id, { coverBusy: '' })
+    })
+    coverTasks.set(id, task)
+    set(id, { coverBusy: kind })
+    return task
+  }
   if (typeof window !== 'undefined') {
     window.addEventListener('beforeunload', event => {
-      if ([...entries.values()].some(entry => entry.version !== entry.savedVersion || entry.importing)) { event.preventDefault(); event.returnValue = '' }
+      if ([...entries.values()].some(entry => entry.version !== entry.savedVersion || entry.importing || entry.coverBusy)) { event.preventDefault(); event.returnValue = '' }
     })
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') for (const id of entries.keys()) flush(id).catch(() => {})
     })
   }
-  return { get, update, flush, flushAll, reload, recycle, importFiles, action, cancelImport: id => controllers.get(id)?.abort(), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } }
+  return { get, update, flush, flushAll, reload, rebase, recycle, importFiles, action, coverTask, cancelImport: id => controllers.get(id)?.abort(), subscribe: fn => { listeners.add(fn); return () => listeners.delete(fn) } }
 }

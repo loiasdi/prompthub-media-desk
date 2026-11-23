@@ -3,7 +3,7 @@ import test from 'node:test'
 import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { createReadStream } from 'node:fs'
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from 'node:fs/promises'
 import { Readable } from 'node:stream'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -15,7 +15,7 @@ import { assertNoAssetUploads } from '../src/asset-upload.js'
 import { writePublishRecords } from '../src/publish/records.js'
 import { MaitianConfig } from '../src/publish/maitian/config.js'
 import { MaitianPublishing } from '../src/publish/maitian/service.js'
-import { exportProject } from '../src/publish/maitian/export.js'
+import { createExportArchive, exportProject, snapshotProject } from '../src/publish/maitian/export.js'
 import { discoverEngine, inspectEngine } from '../src/publish/maitian/engine-loader.mjs'
 import { runComponent } from '../src/publish/maitian/runner-client.js'
 import { inspectSnapshot } from '../src/publish/maitian/media.js'
@@ -53,7 +53,10 @@ test('工程导出固定素材、保存来源摘要、生成可独立解压的�
   assert.equal(result.platform, 'xhs')
   assert.deepEqual(result.warnings, ['上游原始提示'])
   assert.equal(JSON.stringify(result).includes(f.root), false)
+  assert.equal(await f.service.reveal(result.exportId), await realpath(join(f.exportsRoot, result.exportId)))
+  assert.equal((await readdir(f.exportsRoot)).includes(`${result.exportId}.tar.gz`), false)
   const archive = await f.service.archive(result.exportId)
+  assert.equal((await readdir(f.exportsRoot)).includes(`${result.exportId}.tar.gz`), true)
   const unpack = join(f.root, 'unpacked')
   await mkdir(unpack)
   await exec('/usr/bin/tar', ['-xzf', archive.file, '-C', unpack])
@@ -81,8 +84,36 @@ test('工程导出不要求扩展源码目录，并写入传入的项目导出�
   assert.equal(result.platform, 'xhs')
   assert.equal(f.service.public().enabled, false)
   assert.equal((await readdir(output)).includes(result.exportId), true)
-  assert.equal((await readdir(output)).includes(`${result.exportId}.tar.gz`), true)
+  assert.equal((await readdir(output)).includes(`${result.exportId}.tar.gz`), false)
   assert.equal((await f.service.archive(result.exportId, output)).size > 0, true)
+  assert.equal((await readdir(output)).includes(`${result.exportId}.tar.gz`), true)
+})
+
+test('同一稿件再次导出复用工程 ID 并覆盖最新内容；重新打包失败时恢复上一版', async t => {
+  const f = await fixture(t)
+  const legacy = await snapshotProject({ ...f.input, projectsRoot: f.exportsRoot, kind: 'export' })
+  await exec('/usr/bin/tar', ['-czf', join(f.exportsRoot, `${legacy.snapshotId}.tar.gz`), '-C', f.exportsRoot, legacy.snapshotId])
+  const first = { exportId: legacy.snapshotId, projectDigest: legacy.projectDigest }
+  const firstArchive = await readFile((await f.service.archive(first.exportId)).file)
+  const saved = await f.assets.save(id, f.ws.revision, {
+    ...f.ws,
+    publish: { ...f.ws.publish, title: '第二版标题' },
+    publishEdited: { ...f.ws.publishEdited, title: true },
+  })
+  const second = await f.service.export({ ...f.request, revision: saved.revision })
+  assert.equal(second.exportId, first.exportId)
+  assert.notEqual(second.projectDigest, first.projectDigest)
+  const projectDirectory = join(f.exportsRoot, second.exportId)
+  const data = JSON.parse(await readFile(join(projectDirectory, 'publish.json'), 'utf8'))
+  assert.equal(data.name, '第二版标题')
+  assert.equal(JSON.parse(await readFile(join(projectDirectory, 'media-desk-manifest.json'), 'utf8')).revision, saved.revision)
+  const secondArchive = await readFile((await f.service.archive(second.exportId)).file)
+  assert.notDeepEqual(secondArchive, firstArchive)
+
+  const failed = Object.assign(new Error('打包失败'), { status: 507 })
+  await assert.rejects(createExportArchive(f.exportsRoot, second.exportId, async () => { throw failed }), error => error === failed)
+  assert.equal(JSON.parse(await readFile(join(projectDirectory, 'publish.json'), 'utf8')).name, '第二版标题')
+  assert.deepEqual(await readFile((await f.service.archive(second.exportId)).file), secondArchive)
 })
 
 test('七平台与 16:9 封面选择保存后重启可恢复，导出压缩包含所有平台且新增平台参与防重', async t => {
@@ -96,6 +127,7 @@ test('七平台与 16:9 封面选择保存后重启可恢复，导出压缩包�
   assert.equal(browser.covers['16x9'], f.cover.id)
   const output = join(f.root, 'all-platforms')
   const result = await exportProject({ store: restored, exportsRoot: output, id, revision: saved.revision, platforms, inspect: async () => ({ duration: 2 }) })
+  await createExportArchive(output, result.exportId)
   const unpack = join(f.root, 'all-unpacked')
   await mkdir(unpack)
   await exec('/usr/bin/tar', ['-xzf', join(output, `${result.exportId}.tar.gz`), '-C', unpack])
@@ -173,7 +205,8 @@ test('麦田 Host 接口保护写入来源、隐藏路径、下载完整工程�
   f.service.export = async (body, exportsRoot) => exportProject({ ...f.input, ...body, exportsRoot })
   const exportsRoot = join(f.root, 'settings-export')
   let configuredExportDir = exportsRoot
-  const desk = { maitianPublishing: f.service, settings: { read: async () => ({ exportDir: configuredExportDir }) } }
+  const openedFolders = []
+  const desk = { maitianPublishing: f.service, settings: { read: async () => ({ exportDir: configuredExportDir }) }, revealFolder: async path => openedFolders.push(path) }
   const server = createServer((req, res) => route({}, f.store, desk, req, res).catch(() => { res.statusCode = 500; res.end() }))
   server.listen(0, '127.0.0.1'); await once(server, 'listening')
   t.after(() => new Promise(resolve => { server.closeAllConnections(); server.close(resolve) }))
@@ -197,9 +230,14 @@ test('麦田 Host 接口保护写入来源、隐藏路径、下载完整工程�
   assert.equal(response.status, 200)
   const result = await response.json()
   assert.equal((await readdir(exportsRoot)).includes(result.exportId), true)
-  assert.equal((await readdir(exportsRoot)).includes(`${result.exportId}.tar.gz`), true)
+  assert.equal((await readdir(exportsRoot)).includes(`${result.exportId}.tar.gz`), false)
+  const reveal = await post('reveal', { exportId: result.exportId })
+  assert.equal(reveal.status, 200)
+  assert.deepEqual(openedFolders, [await realpath(join(exportsRoot, result.exportId))])
+  assert.equal((await post('reveal', { exportId: result.exportId, path: '/arbitrary' })).status, 400)
   const download = await fetch(`http://127.0.0.1:${server.address().port}/` + result.downloadPath)
   assert.equal(download.status, 200)
+  assert.equal((await readdir(exportsRoot)).includes(`${result.exportId}.tar.gz`), true)
   assert.equal(download.headers.get('content-type'), 'application/gzip')
   assert.equal(download.headers.get('cache-control'), 'no-store')
   const archiveBytes = Buffer.from(await download.arrayBuffer())
@@ -226,7 +264,7 @@ test('真实 ffprobe 路径可验证已归属视频并导出；旧草稿字段�
   assert.ok(data.durationSec > 0)
 })
 
-test('导出复制和压缩前均检查容量，拒绝时移除本次副本并保留原素材和发布记录', async t => {
+test('导出复制先检查容量；压缩仅按需生成并在容量不足时保留工程目录', async t => {
   const f = await fixture(t), original = await readFile(new URL('../assets/v-ink.mp4', import.meta.url))
   let checkedSize, inspected = false
   const full = Object.assign(new Error('测试磁盘余量不足'), { status: 507 })
@@ -234,9 +272,12 @@ test('导出复制和压缩前均检查容量，拒绝时移除本次副本并�
   assert.equal(checkedSize, original.length)
   assert.equal(inspected, false)
   assert.deepEqual(await readdir(f.exportsRoot), [])
-  await assert.rejects(exportProject({ ...f.input, beforeArchive: async ({ sizeBytes }) => { checkedSize = sizeBytes; throw full } }), error => error === full)
+  const result = await exportProject(f.input)
+  assert.equal((await readdir(f.exportsRoot)).includes(`${result.exportId}.tar.gz`), false)
+  await assert.rejects(createExportArchive(f.exportsRoot, result.exportId, async ({ sizeBytes }) => { checkedSize = sizeBytes; throw full }), error => error === full)
   assert.equal(checkedSize, original.length)
-  assert.deepEqual(await readdir(f.exportsRoot), [])
+  assert.equal((await readdir(f.exportsRoot)).includes(result.exportId), true)
+  assert.equal((await readdir(f.exportsRoot)).includes(`${result.exportId}.tar.gz`), false)
   assert.deepEqual(await readFile(new URL('../assets/v-ink.mp4', import.meta.url)), original)
   await assert.rejects(readFile(join(f.store.root, '.publish-records.json')), { code: 'ENOENT' })
 })

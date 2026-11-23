@@ -1,5 +1,6 @@
 import { playableVideo } from './inspiration-source.js'
 import { emptyCoverDesign, sanitizeCoverDesign } from './cover-design-schema.js'
+import { normalizeCoverAssets, selectedCoverIds } from './cover-assets.js'
 import { MAX_PROMPT_TEXT } from './video-prompt-document.js'
 import { MAPPED_PLATFORMS, MAITIAN_COVER_RATIOS } from './publish/maitian/platforms.js'
 
@@ -42,7 +43,7 @@ export function emptyWorkspace(item) {
   const assets = sourceAssets(item)
   return {
     schemaVersion: WORKSPACE_SCHEMA, revision: 0, assets, hidden: [], trash: [], edits: {}, folders: [],
-    selectedVideo: item.sample ? assets.find(a => a.type === 'video')?.id || '' : '', selectedCover: assets.find(a => a.role === 'cover')?.id || '', imageIds: [], segments: [],
+    selectedVideo: item.sample ? assets.find(a => a.type === 'video')?.id || '' : '', selectedCover: assets.find(a => a.role === 'cover')?.id || '', selectedCoverIds: assets.filter(a => a.role === 'cover').slice(0, 1).map(a => a.id), imageIds: [], segments: [],
     ideaText: null, outlineText: '', promptText: null, coverPromptText: null, coverDesign: emptyCoverDesign(item.production?.title || item.title),
     promptSettings: { model: 'general', ratio: '9:16', duration: '30', style: '', referenceIds: [] },
     publish: { ...sourceCopy(item), format: 'video', mode: 'manual', provider: 'api', timezone: 'Asia/Shanghai', browser: { profileId: 'default', covers: {}, shortTitle: '' }, when: '', visibility: 'public' }, publishEdited: {}, publishSource: sourceCopy(item),
@@ -55,7 +56,8 @@ export function registerWorkspaceSources(item) {
   const ws = item.workspace
   const known = new Map((ws.assets || []).map(a => [a.id, a]))
   for (const asset of sourceAssets(item)) known.set(asset.id, { ...known.get(asset.id), ...asset })
-  ws.assets = [...known.values()]
+  ws.assets = normalizeCoverAssets([...known.values()], ws.coverDesign)
+  ws.selectedCoverIds = selectedCoverIds(ws)
 }
 
 export function sanitizeWorkspace(item, input, current) {
@@ -72,7 +74,8 @@ export function sanitizeWorkspace(item, input, current) {
     return [id, { name: string(edit?.name, 240).trim() || asset.name, role: Object.hasOwn(ROLE_NAMES, edit?.role) ? edit.role : asset.role, folder: folderFor(edit?.folder, asset.type) }]
   }))
   ws.selectedVideo = live.get(input.selectedVideo)?.type === 'video' ? input.selectedVideo : ''
-  ws.selectedCover = live.get(input.selectedCover)?.type === 'image' ? input.selectedCover : ''
+  ws.selectedCoverIds = refs(selectedCoverIds(input), new Set([...live.values()].filter(asset => asset.type === 'image').map(asset => asset.id)))
+  ws.selectedCover = ws.selectedCoverIds[0] || ''
   ws.imageIds = refs(input.imageIds, new Set([...live.values()].filter(a => a.type === 'image').map(a => a.id)))
   for (const field of ['ideaText', 'outlineText']) {
     if (input[field] !== undefined) {

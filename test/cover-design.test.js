@@ -10,6 +10,7 @@ import { coverPromptAction, coverImageAction } from '../src/cover-design.js'
 import { generateCoverHttpImage } from '../src/cover-image-http.js'
 import { sanitizeCoverDesign, emptyCoverDesign } from '../src/cover-design-schema.js'
 import { createWorkspaceDraft, patchWorkspaceDraft, resolveWorkspaceDraft, workspaceContentPresence } from '../client/workspace.js'
+import { selectPublishCover } from '../client/cover.js'
 
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=', 'base64')
 async function fixture(run) {
@@ -59,7 +60,7 @@ test('拒绝错误比例、改写标题、过期请求和不支持的参考图�
   const d = { ...emptyCoverDesign(), title: '固定标题', requirements: '不添加真人', ratios: ['3:4'] }
   let ws = await assets.save('piece', 0, { ...current, coverDesign: d })
   await assert.rejects(coverPromptAction(context({ variants: { '3:4': '3:4 新标题' } }, {}), store, { assets }, { id: 'piece', revision: ws.revision }), /未返回完整/)
-  await assert.rejects(coverPromptAction(context({}, {}), store, { assets }, { id: 'piece', revision: 0 }), /其他窗口/)
+  await assert.rejects(coverPromptAction(context({}, {}), store, { assets }, { id: 'piece', revision: 0 }), /工作区版本已更新/)
   const result = await assets.import('piece', Readable.from([PNG]), { name: '人物.png', revision: ws.revision })
   d.personIds = [result.asset.id]
   d.variants['3:4'].prompt = '3:4 固定标题'
@@ -103,8 +104,133 @@ test('封面成图使用保存的图片 API 与当前比例；图片链接下载
   assert.equal(requests[1].options.headers.authorization, 'Bearer test-key')
   assert.equal(requests[1].options.redirect, 'error')
   assert.equal(result.asset.type, 'image')
+  assert.equal(result.asset.role, 'cover')
+  assert.equal(result.asset.coverRatio, '16:9')
   assert.match(result.asset.name, /^cover-16x9-\d+\.png$/)
   assert.equal((await assets.read('piece')).assets.find(asset => asset.id === result.asset.id)?.coverResult, true)
+  assert.deepEqual(result.workspace.coverDesign.variants['16:9'].imageIds, [result.asset.id])
+  const regenerated = await coverImageAction(ctx, store, { assets, settings: { read: async () => ({ image }) } }, { id: 'piece', revision: result.workspace.revision, ratio: '16:9' })
+  const reopened = await new ContentAssets(new Store(store.root)).read('piece')
+  assert.deepEqual(reopened.coverDesign.variants['16:9'].imageIds, [regenerated.asset.id])
+  assert.ok(reopened.assets.some(asset => asset.id === result.asset.id && asset.role === 'cover'))
+  assert.ok(reopened.assets.every(asset => asset.coverRatio === '16:9'))
+  const chosen = reopened.assets.find(asset => asset.id === regenerated.asset.id)
+  await assets.save('piece', reopened.revision, { ...reopened, ...selectPublishCover(reopened, chosen), edits: { [chosen.id]: { name: '新版封面.png', role: 'cover' } } })
+  const selected = await new ContentAssets(new Store(store.root)).read('piece')
+  assert.equal(selected.publish.browser.covers['16x9'], chosen.id)
+  assert.equal(selected.assets.find(asset => asset.id === chosen.id).coverRatio, '16:9')
+  assert.equal(selected.edits[chosen.id].name, '新版封面.png')
+}))
+
+test('三种比例并行生图，部分失败保留成功结果和旧图，失败比例仍显示原图', async t => fixture(async ({ store, assets }) => {
+  const old = await assets.import('piece', Readable.from([PNG]), { name: 'old.png', revision: 0 })
+  const design = old.workspace.coverDesign
+  for (const ratio of design.ratios) design.variants[ratio] = { prompt: `${ratio} 封面`, imageIds: [old.asset.id] }
+  const ws = await assets.save('piece', old.workspace.revision, { ...old.workspace, selectedCover: old.asset.id, coverDesign: design })
+  let active = 0, peak = 0
+  let failWide = true
+  const sizes = []
+  t.mock.method(globalThis, 'fetch', async (_url, options) => {
+    const request = JSON.parse(options.body)
+    sizes.push(request.size)
+    peak = Math.max(peak, ++active)
+    await new Promise(resolve => setTimeout(resolve, 10))
+    active--
+    return failWide && request.size === '1536x864'
+      ? Response.json({ error: { message: 'temporary failure' } }, { status: 503 })
+      : Response.json({ data: [{ b64_json: PNG.toString('base64') }] })
+  })
+  const desk = { assets, settings: { read: async () => ({ image: { source: 'http', baseUrl: 'https://example.com', model: 'image', apiKey: 'test' } }) } }
+  const result = await coverImageAction({}, store, desk, { id: 'piece', revision: ws.revision, ratios: design.ratios })
+  assert.equal(peak, 3)
+  assert.equal(new Set(sizes).size, 3)
+  assert.deepEqual(result.results.map(row => row.ratio), ['3:4', '4:3'])
+  assert.deepEqual(result.errors.map(row => row.ratio), ['16:9'])
+  const reopened = await new ContentAssets(new Store(store.root)).read('piece')
+  assert.equal(reopened.assets.length, 3)
+  assert.equal(reopened.assets.find(asset => asset.id === old.asset.id).coverResult, true)
+  assert.equal(reopened.selectedCover, old.asset.id)
+  assert.deepEqual(reopened.coverDesign.variants['16:9'].imageIds, [old.asset.id])
+  for (const row of result.results) {
+    assert.deepEqual(reopened.coverDesign.variants[row.ratio].imageIds, [row.asset.id])
+    assert.equal(reopened.assets.find(asset => asset.id === row.asset.id).coverRatio, row.ratio)
+  }
+  failWide = false
+  const regenerated = await coverImageAction({}, store, desk, { id: 'piece', revision: reopened.revision, ratios: design.ratios })
+  assert.equal(regenerated.results.length, 3)
+  assert.deepEqual(regenerated.errors, [])
+  const final = await assets.read('piece')
+  assert.equal(final.assets.length, 6)
+  for (const row of regenerated.results) assert.deepEqual(final.coverDesign.variants[row.ratio].imageIds, [row.asset.id])
+  assert.equal(final.selectedCover, old.asset.id)
+}))
+
+test('生图期间另一窗口保存文案，成图仍全部入库且不覆盖最新文案', async t => fixture(async ({ store, assets }) => {
+  let ws = await assets.read('piece')
+  for (const ratio of ws.coverDesign.ratios) ws.coverDesign.variants[ratio].prompt = `${ratio} 封面`
+  ws = await assets.save('piece', ws.revision, ws)
+  let calls = 0, edited = false
+  t.mock.method(globalThis, 'fetch', async () => {
+    calls++
+    if (!edited) {
+      edited = true
+      const latest = await assets.read('piece')
+      await assets.save('piece', latest.revision, { ...latest, outlineText: '另一窗口刚保存的大纲' })
+    }
+    return Response.json({ data: [{ b64_json: PNG.toString('base64') }] })
+  })
+  const desk = { assets, settings: { read: async () => ({ image: { source: 'http', baseUrl: 'https://example.com', model: 'image', apiKey: 'test' } }) } }
+  const result = await coverImageAction({}, store, desk, { id: 'piece', revision: ws.revision, ratios: ws.coverDesign.ratios })
+  assert.equal(calls, 3)
+  assert.equal(result.results.length, 3)
+  assert.deepEqual(result.errors, [])
+  const reopened = await assets.read('piece')
+  assert.equal(reopened.outlineText, '另一窗口刚保存的大纲')
+  assert.equal(reopened.assets.length, 3)
+  for (const row of result.results) assert.deepEqual(reopened.coverDesign.variants[row.ratio].imageIds, [row.asset.id])
+}))
+
+test('成图合并保留提交前的修订检查，过期请求不调用模型', async t => fixture(async ({ store, assets }) => {
+  const before = await assets.read('piece')
+  for (const ratio of before.coverDesign.ratios) before.coverDesign.variants[ratio].prompt = `${ratio} 封面`
+  await assets.save('piece', before.revision, before)
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('不应调用模型') })
+  const desk = { assets, settings: { read: async () => ({ image: {} }) } }
+  await assert.rejects(coverImageAction({}, store, desk, { id: 'piece', revision: before.revision, ratios: before.coverDesign.ratios }), { status: 409 })
+  assert.equal(calls, 0)
+}))
+
+test('生成期间切换存储目录不能把旧任务结果导入新工作台', async t => fixture(async ({ store, assets }) => {
+  let ws = await assets.read('piece')
+  ws.coverDesign.variants['3:4'].prompt = '封面'
+  ws = await assets.save('piece', ws.revision, ws)
+  const root = store.root
+  t.mock.method(globalThis, 'fetch', async () => {
+    store.useRoot(join(root, 'other-workspace'))
+    return Response.json({ data: [{ b64_json: PNG.toString('base64') }] })
+  })
+  const desk = { assets, settings: { read: async () => ({ image: { source: 'http', baseUrl: 'https://example.com', model: 'image', apiKey: 'test' } }) } }
+  await assert.rejects(coverImageAction({}, store, desk, { id: 'piece', revision: ws.revision, ratio: '3:4' }), { status: 409, message: /目录已更换/ })
+  store.useRoot(root)
+  assert.equal((await assets.read('piece')).assets.length, ws.assets.length)
+}))
+
+test('批量生图在请求前校验全部提示词和比例，全部失败时保留旧结果', async t => fixture(async ({ store, assets }) => {
+  let ws = await assets.read('piece')
+  const desk = { assets, settings: { read: async () => ({ image: { source: 'http', baseUrl: 'https://example.com', model: 'image', apiKey: 'test' } }) } }
+  let calls = 0
+  t.mock.method(globalThis, 'fetch', async () => { calls++; return Response.json({ error: { message: 'unavailable' } }, { status: 503 }) })
+  for (const ratios of [[], ['3:4', '3:4'], ['1:1'], ['3:4', '16:9', '4:3']]) {
+    await assert.rejects(coverImageAction({}, store, desk, { id: 'piece', revision: ws.revision, ratios }))
+  }
+  assert.equal(calls, 0)
+  const design = ws.coverDesign
+  for (const ratio of design.ratios) design.variants[ratio].prompt = `${ratio} 封面`
+  ws = await assets.save('piece', ws.revision, { ...ws, coverDesign: design })
+  await assert.rejects(coverImageAction({}, store, desk, { id: 'piece', revision: ws.revision, ratios: design.ratios }), /3:4.*unavailable[\s\S]*16:9[\s\S]*4:3/)
+  assert.equal(calls, 3)
+  assert.deepEqual(await assets.read('piece'), ws)
 }))
 
 test('图片 API 不向异源图片地址转发密钥，不下载内网地址，失败不重复生图', async () => {

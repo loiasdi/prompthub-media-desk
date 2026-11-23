@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { chmod, mkdir, rename, rm, writeFile, readFile, lstat, realpath } from 'node:fs/promises'
-import { extname, isAbsolute, join } from 'node:path'
+import { chmod, mkdir, rename, rm, writeFile, readFile, lstat, realpath, readdir } from 'node:fs/promises'
+import { dirname, extname, isAbsolute, join } from 'node:path'
 import { currentWorkspace } from '../../content-assets.js'
 import { withAssetUpload } from '../../asset-upload.js'
 import { sourceCopy } from '../../workspace-schema.js'
@@ -60,14 +60,15 @@ export function captureProject(store, id, revision, platform, platforms) {
   return { workspace, copy }
 }
 
-export async function snapshotProject({ store, projectsRoot, engineRef, contract, validate, id, revision, platform, platforms, confirmExisting = false, inspect = inspectSnapshot, kind = 'task', onCapture = async () => {}, onReserve = async () => {}, beforeCopy, onReady = async () => {}, beforeCommit = async () => {}, onCommit = async () => {} }) {
+export async function snapshotProject({ store, projectsRoot, engineRef, contract, validate, id, revision, platform, platforms, confirmExisting = false, inspect = inspectSnapshot, kind = 'task', snapshotId, replaceExisting = false, onCapture = async () => {}, onReserve = async () => {}, beforeCopy, onReady = async () => {}, beforeCommit = async () => {}, onCommit = async () => {} }) {
   let targets
   try { targets = normalizePlatforms(platform, platforms) }
   catch { throw new MaitianError('UNSUPPORTED_PROJECT', '当前组件不支持此工程的映射与校验') }
   if (validate && (!contract?.operations?.validate || targets.some(target => !contract.platforms[target]?.mapped))) throw new MaitianError('UNSUPPORTED_PROJECT', '当前组件不支持此工程的映射与校验')
-  const exportId = randomUUID()
+  const exportId = snapshotId || randomUUID()
   const staging = join(projectsRoot, `.pending-${exportId}`)
   const destination = join(projectsRoot, exportId)
+  let previousDestination
   let published = false
   try {
     await mkdir(projectsRoot, { recursive: true, mode: 0o700 })
@@ -124,45 +125,109 @@ export async function snapshotProject({ store, projectsRoot, engineRef, contract
         if (store.root !== root || JSON.stringify(captureProject(store, id, revision, platform, platforms)) !== JSON.stringify(captured)) throw new MaitianError('REVISION_CHANGED', '发布信息或选材已变化，请重新导出')
         const existing = (await readPublishRecords(root)).some(row => row.itemId === id && targets.includes(row.platform) && blocksDuplicate(row))
         if (existing && confirmExisting !== true) throw new MaitianError('EXISTING_PUBLICATION', '文件准备期间出现已有投稿，请先核对平台结果')
+        if (replaceExisting) {
+          let previous
+          try { previous = await lstat(destination) }
+          catch (error) { if (error.code !== 'ENOENT') throw error }
+          if (previous) {
+            if (!previous.isDirectory() || previous.isSymbolicLink()) throw new MaitianError('EXPORT_CONFLICT', '现有工程目录无法安全更新')
+            const oldManifest = JSON.parse(await readFile(join(destination, 'media-desk-manifest.json'), 'utf8'))
+            if (oldManifest.version !== 1 || oldManifest.provider !== 'maitian' || oldManifest.kind !== 'export' || oldManifest.itemId !== id) throw new MaitianError('EXPORT_CONFLICT', '目标目录已被其他内容占用，未覆盖')
+            previousDestination = join(projectsRoot, `.previous-${exportId}-${randomUUID()}`)
+            await rename(destination, previousDestination)
+          }
+        }
         await rename(staging, destination)
         published = true
         await onCommit({ root, manifest, data, files, ...captured })
       })
-      return { snapshotId: exportId, projectDigest, manifest, data, files }
+      return { snapshotId: exportId, projectDigest, manifest, data, files, previousDestination }
     })
   } catch (error) {
     if (published) await rm(destination, { recursive: true, force: true })
+    if (previousDestination) await rename(previousDestination, destination).catch(() => {})
     throw error
   } finally { await rm(staging, { recursive: true, force: true }) }
 }
 
-export async function exportProject({ exportsRoot, beforeArchive = async () => {}, ...options }) {
-  const snapshot = await snapshotProject({ ...options, projectsRoot: exportsRoot, kind: 'export' })
-  const exportId = snapshot.snapshotId
+async function reusableExportId(exportsRoot, stableId, itemId) {
+  const matchesManifest = async exportId => {
+    try {
+      const directory = join(exportsRoot, exportId)
+      const info = await lstat(directory)
+      if (!info.isDirectory() || info.isSymbolicLink()) return false
+      const manifest = JSON.parse(await readFile(join(directory, 'media-desk-manifest.json'), 'utf8'))
+      return manifest.version === 1 && manifest.provider === 'maitian' && manifest.kind === 'export' && manifest.exportId === exportId && manifest.itemId === itemId
+    } catch { return false }
+  }
+  const deterministicId = `${stableId.slice(0, 8)}-${stableId.slice(8, 12)}-${stableId.slice(12, 16)}-${stableId.slice(16, 20)}-${stableId.slice(20)}`
+  if (await matchesManifest(deterministicId)) return deterministicId
+  const entries = await readdir(exportsRoot, { withFileTypes: true }).catch(error => error.code === 'ENOENT' ? [] : Promise.reject(error))
+  const matches = []
+  for (const entry of entries) {
+    if (entry.isDirectory() && UUID.test(entry.name) && await matchesManifest(entry.name)) matches.push(entry.name)
+  }
+  return matches.length === 1 ? matches[0] : deterministicId
+}
+
+export async function exportProject({ exportsRoot, ...options }) {
+  const stableId = createHash('sha256').update(JSON.stringify([options.store.root, options.id])).digest('hex').slice(0, 32)
+  const exportId = await reusableExportId(exportsRoot, stableId, options.id)
+  const snapshot = await snapshotProject({ ...options, snapshotId: exportId, replaceExisting: true, projectsRoot: exportsRoot, kind: 'export' })
+  if (snapshot.previousDestination) await rm(snapshot.previousDestination, { recursive: true, force: true }).catch(() => {})
+  return { exportId, projectDigest: snapshot.projectDigest, platform: snapshot.manifest.platform, platforms: snapshot.manifest.platforms,
+    warnings: snapshot.manifest.warnings, files: [...snapshot.files, 'media-desk-manifest.json'],
+    downloadPath: `media-desk/publish/maitian/download?exportId=${exportId}` }
+}
+
+async function exportManifest(exportsRoot, exportId) {
+  if (typeof exportId !== 'string' || !UUID.test(exportId)) throw new MaitianError('INVALID_EXPORT', '导出标识无效', 400)
+  try {
+    const directory = join(exportsRoot, exportId)
+    const [directoryInfo, manifestInfo] = await Promise.all([lstat(directory), lstat(join(directory, 'media-desk-manifest.json'))])
+    if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink() || !manifestInfo.isFile() || manifestInfo.size > 1_000_000) throw new Error('invalid')
+    const manifest = JSON.parse(await readFile(join(directory, 'media-desk-manifest.json'), 'utf8'))
+    if (manifest.exportId !== exportId || manifest.provider !== 'maitian' || manifest.kind !== 'export') throw new Error('invalid')
+    return manifest
+  } catch { throw new MaitianError('EXPORT_NOT_FOUND', '导出文件不存在或无法读取', 404) }
+}
+
+export async function createExportArchive(exportsRoot, exportId, beforeArchive = async () => {}) {
+  const manifest = await exportManifest(exportsRoot, exportId)
+  const temporaryArchive = join(exportsRoot, `.pending-${exportId}-${randomUUID()}.tar.gz`)
   const archive = join(exportsRoot, `${exportId}.tar.gz`)
   try {
-    await beforeArchive({ sizeBytes: snapshot.manifest.assets.reduce((total, asset) => total + asset.sizeBytes, 0) })
-    // Archive a controlled, generated directory; no shell and no caller-supplied arguments.
-    await exec('/usr/bin/tar', ['-czf', archive, '-C', exportsRoot, exportId], { timeout: 120_000, maxBuffer: 256_000, env: { ...process.env, COPYFILE_DISABLE: '1' } })
-    await chmod(archive, 0o600)
-    return { exportId, projectDigest: snapshot.projectDigest, platform: snapshot.manifest.platform, platforms: snapshot.manifest.platforms,
-      warnings: snapshot.manifest.warnings, files: [...snapshot.files, 'media-desk-manifest.json'],
-      downloadPath: `media-desk/publish/maitian/download?exportId=${exportId}` }
+    await beforeArchive({ sizeBytes: manifest.assets.reduce((total, asset) => total + asset.sizeBytes, 0) })
+    await exec('/usr/bin/tar', ['-czf', temporaryArchive, '-C', exportsRoot, exportId], { timeout: 120_000, maxBuffer: 256_000, env: { ...process.env, COPYFILE_DISABLE: '1' } })
+    await chmod(temporaryArchive, 0o600)
+    await rename(temporaryArchive, archive)
+    const info = await lstat(archive)
+    return { file: archive, size: info.size }
   } catch (error) {
-    await rm(archive, { force: true })
-    await rm(join(exportsRoot, exportId), { recursive: true, force: true })
+    await rm(temporaryArchive, { force: true })
     throw error
   }
 }
 
 export async function exportedArchive(exportsRoot, exportId) {
-  if (typeof exportId !== 'string' || !UUID.test(exportId)) throw new MaitianError('INVALID_EXPORT', '导出标识无效', 400)
+  await exportManifest(exportsRoot, exportId)
   const file = join(exportsRoot, `${exportId}.tar.gz`)
   try {
-    const [info, manifestInfo] = await Promise.all([lstat(file), lstat(join(exportsRoot, exportId, 'media-desk-manifest.json'))])
-    if (!info.isFile() || !manifestInfo.isFile() || manifestInfo.size > 1_000_000) throw new Error('invalid')
-    const manifest = JSON.parse(await readFile(join(exportsRoot, exportId, 'media-desk-manifest.json'), 'utf8'))
-    if (manifest.exportId !== exportId || manifest.provider !== 'maitian') throw new Error('invalid')
+    const info = await lstat(file)
+    if (!info.isFile()) throw new Error('invalid')
     return { file, size: info.size }
-  } catch { throw new MaitianError('EXPORT_NOT_FOUND', '导出文件不存在或无法读取', 404) }
+  } catch { throw new MaitianError('EXPORT_NOT_FOUND', '导出压缩包不存在或无法读取', 404) }
+}
+
+export async function exportedProjectDirectory(exportsRoot, exportId) {
+  const root = await realpath(exportsRoot)
+  await exportManifest(root, exportId)
+  const directory = join(root, exportId)
+  try {
+    const info = await lstat(directory)
+    if (!info.isDirectory() || info.isSymbolicLink()) throw new Error('invalid')
+    const resolved = await realpath(directory)
+    if (dirname(resolved) !== root) throw new Error('invalid')
+    return resolved
+  } catch { throw new MaitianError('EXPORT_NOT_FOUND', '导出工程目录不存在或无法读取', 404) }
 }

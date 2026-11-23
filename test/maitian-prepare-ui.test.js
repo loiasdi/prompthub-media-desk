@@ -5,20 +5,40 @@ import { build } from 'esbuild'
 import React from 'react'
 import TestRenderer, { act } from 'react-test-renderer'
 
-const compiled = await build({ stdin: { contents: "export { MaitianPrepare } from './client/maitian-prepare.jsx'; export { MaitianExport, useMaitianBundle, MaitianExportConsole } from './client/maitian-publish.jsx'; export { PublishMethod, publishMethod } from './client/publish-method.jsx'; export { PublishPage } from './client/content-workspace.jsx'; export { setLanguagePreference } from './client/i18n.js'", resolveDir: process.cwd() },
+const compiled = await build({ stdin: { contents: "export { Select as SelectControl } from './client/select.jsx'; export { MaitianPrepare } from './client/maitian-prepare.jsx'; export { MaitianExport, useMaitianBundle, MaitianExportConsole, MaitianBundlePanel } from './client/maitian-publish.jsx'; export { PublishMethod, publishMethod } from './client/publish-method.jsx'; export { PublishPage } from './client/content-workspace.jsx'; export { setLanguagePreference } from './client/i18n.js'", resolveDir: process.cwd() },
   bundle: true, write: false, format: 'cjs', platform: 'node', external: ['react'], plugins: [{ name: 'workspace-actions', setup(build) {
     build.onResolve({ filter: /^\.\/workspace\.js$/ }, args => /\/client\/maitian-(?:prepare|publish)\.jsx$/.test(args.importer) ? { path: 'workspace', namespace: 'maitian-form-test' } : undefined)
     build.onLoad({ filter: /.*/, namespace: 'maitian-form-test' }, () => ({ contents: `export const prepareMaitianPublish = (...a) => globalThis.__form.prepare(...a); export const flushWorkspace = (...a) => globalThis.__form.flush(...a); export const exportMaitianProject = (...a) => globalThis.__form.export(...a); export const formatBytes = n => n + ' bytes';` }))
   } }] })
 const module = { exports: {} }
 new Function('require', 'module', 'exports', compiled.outputFiles[0].text)(createRequire(import.meta.url), module, module.exports)
-const { MaitianPrepare, MaitianExport, useMaitianBundle, MaitianExportConsole, PublishMethod, publishMethod, PublishPage, setLanguagePreference } = module.exports
+const { SelectControl, MaitianPrepare, MaitianExport, useMaitianBundle, MaitianExportConsole, MaitianBundlePanel, PublishMethod, publishMethod, PublishPage, setLanguagePreference } = module.exports
 const digest = 'a'.repeat(64), taskId = 'aabbccdd-0000-4000-8000-112233445566'
 const text = renderer => JSON.stringify(renderer.toJSON())
 const button = (renderer, label) => renderer.root.findAllByType('button').find(node => node.children.includes(label))
 const nodeText = node => typeof node === 'string' ? node : node.children.map(nodeText).join('')
 const input = (renderer, label, type = 'input') => renderer.root.findAllByType('label').find(node => nodeText(node).includes(label)).findByType(type)
 const fill = (renderer, label, value) => act(async () => input(renderer, label).props.onChange({ target: { value, checked: value } }))
+
+test('生成封面按标签比例一键填入发布槽位，优先最新图并保留已有选择', async t => {
+  const initial = props(), patches = []
+  const browser = { covers: { '3x4': 'manual' }, shortTitle: '' }
+  const assets = [
+    { id: 'old-wide', type: 'image', name: '旧横版.png', role: 'cover', coverResult: true, coverRatio: '16:9' },
+    { id: 'portrait', type: 'image', name: '竖版.png', role: 'cover', coverResult: true, coverRatio: '3:4' },
+    { id: 'wide', type: 'image', name: '新横版.png', role: 'cover', coverResult: true, coverRatio: '16:9' },
+    { id: 'landscape', type: 'image', name: '横版.png', role: 'cover', coverResult: true, coverRatio: '4:3' },
+  ]
+  const bundle = { ...initial, publish: initial.draft.publish, browser, assets, selectedPlatforms: ['xhs', 'youtube', 'bilibili'], neededRatios: ['3x4', '16x9', '4x3'],
+    patchBrowser: patch => patches.push(patch), publishing: {}, setSettingsOpen() {}, togglePlatform() {} }
+  let renderer
+  await act(async () => { renderer = TestRenderer.create(React.createElement(MaitianBundlePanel, { bundle })) })
+  t.after(async () => act(async () => renderer.unmount()))
+  const wide = renderer.root.findAllByType('label').find(label => /工程封面\s*16x9/.test(nodeText(label))).findByType(SelectControl)
+  assert.deepEqual(wide.props.options[1], { value: 'old-wide', label: '旧横版.png', thumbnail: undefined, badges: ['封面', '16:9'] })
+  await act(async () => button(renderer, '按比例填入生成封面').props.onClick())
+  assert.deepEqual(patches[0].covers, { '3x4': 'manual', '16x9': 'wide', '4x3': 'landscape' })
+})
 const props = () => ({ item: { id: 'piece' }, draft: { selectedVideo: 'video', selectedCover: '', imageIds: [], publishChanges: [], publish: { provider: 'maitian', mode: 'now', platform: '小红书', format: 'video', title: '当前草稿', description: '草稿正文', tags: '#话题', browser: { profileId: 'default', covers: {}, shortTitle: '' } } },
   assets: [{ id: 'video', type: 'video', src: 'media-desk/files/piece/video.mp4', bytes: 100, sha256: digest }], platform: 'xhs',
   config: { enabled: true, profileId: 'default', implementation: { prepare: true, directFill: true } },
@@ -283,8 +303,8 @@ test('发布页展示七个麦田平台，勾选 YouTube 后选择 16:9 封面�
   await act(async () => platforms[4].findByType('input').props.onChange())
   const wide = renderer.root.findAllByType('label').find(label => /工程封面\s*16x9/.test(nodeText(label)))
   assert.ok(wide)
-  await act(async () => wide.findByType('select').props.onChange({ target: { value: 'wide' } }))
-  assert.equal(wide.findByType('select').props.value, 'wide')
+  await act(async () => wide.findByType(SelectControl).props.onChange({ target: { value: 'wide' } }))
+  assert.equal(wide.findByType(SelectControl).props.value, 'wide')
   await act(async () => button(renderer, '校验并生成麦田工程包').props.onClick())
   assert.deepEqual(exported, ['piece', ['xhs', 'channels', 'youtube'], false])
   assert.ok(renderer.root.findByType('a'))
@@ -302,8 +322,46 @@ test('直驱目标平台可独立于稿件平台选择', async t => {
   t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before })
   const settingButton = button(renderer, '麦田设置')
   await act(async () => settingButton.props.onClick())
-  const target = renderer.root.findAllByType('label').find(label => /直驱目标平台/.test(nodeText(label))).findByType('select')
+  const target = renderer.root.findAllByType('label').find(label => /直驱目标平台/.test(nodeText(label))).findByType(SelectControl)
   await act(async () => target.props.onChange({ target: { value: 'channels' } }))
   assert.equal(updates.length, 0)
   assert.match(text(renderer), /直驱快照会按选定目标平台生成，不会修改稿件的平台字段/)
+})
+
+
+test('发布封面多选同步默认预览和比例槽位，移除默认封面切到下一张', async t => {
+  const before = globalThis.window
+  globalThis.window = { addEventListener() {}, removeEventListener() {} }
+  t.mock.method(globalThis, 'fetch', async () => Response.json({ platforms: {}, jobs: [], lockedPlatforms: {} }))
+  const initial = props()
+  const assets = [
+    ...initial.assets,
+    { id: 'portrait', type: 'image', role: 'cover', name: '竖版.png', coverRatio: '3:4', src: '/portrait.png' },
+    { id: 'wide', type: 'image', role: 'cover', name: '横版.png', coverRatio: '16:9', src: '/wide.png' },
+    { id: 'landscape', type: 'image', role: 'cover', name: '横图.png', coverRatio: '4:3', src: '/landscape.png' },
+  ]
+  let latest, renderer
+  function Page() {
+    const [draft, setDraft] = React.useState(initial.draft)
+    latest = draft
+    return React.createElement(PublishPage, { ...initial, assets, draft, update: patch => setDraft(previous => ({ ...previous, ...(typeof patch === 'function' ? patch(previous) : patch) })), onTab() {}, syncPublish() {} })
+  }
+  await act(async () => { renderer = TestRenderer.create(React.createElement(Page)) })
+  t.after(async () => { await act(async () => renderer.unmount()); globalThis.window = before })
+  const selector = () => renderer.root.findAllByType(SelectControl).find(node => node.props.multiple)
+  assert.equal(renderer.root.findAllByType('select').length, 0)
+  assert.deepEqual(selector().props.options.map(option => option.badges), [['封面', '3:4'], ['封面', '16:9'], ['封面', '4:3']])
+  await act(async () => selector().props.onChange({ target: { value: ['wide', 'portrait', 'landscape'] } }))
+  assert.deepEqual(latest.selectedCoverIds, ['wide', 'portrait', 'landscape'])
+  assert.equal(latest.selectedCover, 'wide')
+  assert.deepEqual(latest.publish.browser.covers, { '16x9': 'wide', '3x4': 'portrait', '4x3': 'landscape' })
+  assert.equal(renderer.root.findByProps({ className: 'md-release-preview' }).findByType('img').props.src, '/wide.png')
+  await act(async () => selector().props.onChange({ target: { value: ['portrait', 'landscape'] } }))
+  assert.equal(latest.selectedCover, 'portrait')
+  assert.deepEqual(latest.publish.browser.covers, { '3x4': 'portrait', '4x3': 'landscape' })
+  assert.equal(renderer.root.findByProps({ className: 'md-release-preview' }).findByType('img').props.src, '/portrait.png')
+  await act(async () => selector().props.onChange({ target: { value: [] } }))
+  assert.deepEqual(latest.selectedCoverIds, [])
+  assert.equal(latest.selectedCover, '')
+  assert.deepEqual(latest.publish.browser.covers, {})
 })

@@ -1,3 +1,4 @@
+import { Select as SelectControl } from './select.jsx'
 import React from 'react'
 import { workURL } from '../src/publish/maitian/results.js'
 import { Dialog } from './ui.jsx'
@@ -90,7 +91,7 @@ export function MaitianTaskActions({ id, job, request, refresh }) {
         <label className="md-field"><span>{t('核对原因与证据')}</span><textarea value={fields.reason || ''} maxLength={2000} onChange={event => change('reason', event.target.value)} /></label>
       </> : null}
       {action === 'associate' ? <>
-        <label className="md-field"><span>{t('平台实际状态')}</span><select value={fields.status} onChange={event => change('status', event.target.value)}><option value="">{t('请选择')}</option>{Object.entries(STATES).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}</select></label>
+        <label className="md-field"><span>{t('平台实际状态')}</span><SelectControl value={fields.status} onChange={event => change('status', event.target.value)}><option value="">{t('请选择')}</option>{Object.entries(STATES).map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}</SelectControl></label>
         <label className="md-field"><span>{t('平台作品 ID（可选）')}</span><input value={fields.workId} maxLength={200} onChange={event => change('workId', event.target.value)} /></label>
         <label className="md-field"><span>{t('作品链接（可选）')}</span><input value={fields.url} maxLength={4096} onChange={event => change('url', event.target.value)} /></label>
         {fields.status === 'scheduled' ? <>

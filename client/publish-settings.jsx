@@ -1,3 +1,4 @@
+import { Select as SelectControl } from './select.jsx'
 import React from 'react'
 import { PUBLISH_PLATFORMS } from '../src/publish/capabilities.js'
 import { PUBLISH_CONFIG_FIELDS, publishConfigPlatforms } from '../src/publish/config-schema.js'
@@ -115,7 +116,7 @@ export function PublishSettingsDialog() {
     <div className="md-form md-publish-settings-shell">
       <div className="md-publish-settings-scroll">
       <p className="md-publish-intro">{t('配置各平台自有应用和授权账号。凭据仅保存在 Host 本地，不上传 AiToEarn；不提供自动 OAuth 授权。')}</p>
-      <label className="md-field"><span>{t('平台')}</span><select disabled={Boolean(busy)} value={platform} onChange={event => { setPlatform(event.target.value); setNotice('') }}>{publishConfigPlatforms.map(key => <option key={key} value={key}>{t(PUBLISH_PLATFORMS[key].name)}</option>)}</select></label>
+      <label className="md-field"><span>{t('平台')}</span><SelectControl disabled={Boolean(busy)} value={platform} onChange={event => { setPlatform(event.target.value); setNotice('') }}>{publishConfigPlatforms.map(key => <option key={key} value={key}>{t(PUBLISH_PLATFORMS[key].name)}</option>)}</SelectControl></label>
       <div className="md-publish-settings-grid">
       <details className="md-publish-guide" key={platform} open aria-label={t('如何获取配置')}>
         <summary><strong>{t('如何获取配置')} · {t(PUBLISH_PLATFORMS[platform].name)}</strong></summary>

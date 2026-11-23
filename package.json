@@ -82,6 +82,7 @@
     "url": "https://github.com/loiasdi/prompthub-media-desk/issues"
   },
   "dependencies": {
+    "@radix-ui/react-popover": "^1.2.0",
     "twitter-text": "3.1.0"
   }
 }

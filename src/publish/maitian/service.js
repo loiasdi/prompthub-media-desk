@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { MaitianConfig } from './config.js'
 import { discoverEngine } from './engine-loader.mjs'
 import { runComponent } from './runner-client.js'
-import { exportProject, exportedArchive } from './export.js'
+import { exportProject, createExportArchive, exportedProjectDirectory } from './export.js'
 import { MaitianError, publicFailure } from './errors.js'
 import { acquireProfileLock } from './profile-lock.js'
 import { prepareTask } from './prepare.js'
@@ -54,7 +54,6 @@ export class MaitianPublishing {
       store: this.store, exportsRoot,
       id: request.id, revision: request.revision, platform: request.platform, platforms: request.platforms, confirmExisting: request.confirmExisting,
       beforeCopy: ({ sizeBytes }) => checkSnapshotDisk(exportsRoot, sizeBytes),
-      beforeArchive: ({ sizeBytes }) => checkSnapshotDisk(exportsRoot, sizeBytes),
     })
   }
   async browser(op, { platform, operationId: pageOperationId } = {}) {
@@ -74,7 +73,10 @@ export class MaitianPublishing {
       browser: { root: this.config.root, profileDir: options.profileDir, profileId: options.profileId, chromePath: options.chromePath, port: options.port },
     })
   }
-  archive(exportId, exportsRoot = join(this.config.root, 'exports')) { return exportedArchive(exportsRoot, exportId) }
+  archive(exportId, exportsRoot = join(this.config.root, 'exports')) {
+    return createExportArchive(exportsRoot, exportId, ({ sizeBytes }) => checkSnapshotDisk(exportsRoot, sizeBytes))
+  }
+  reveal(exportId, exportsRoot = join(this.config.root, 'exports')) { return exportedProjectDirectory(exportsRoot, exportId) }
   prepare(request) { return prepareTask(this, request) }
   start(request) { return startTask(this, request) }
   cancel(request) { return cancelTask(this, request) }

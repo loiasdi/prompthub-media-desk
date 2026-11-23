@@ -90,6 +90,24 @@ test('素材接口拒绝伪造文件、跨内容引用与旧修订，不影响�
   await assert.rejects(assets.recycle('other', 0, asset.id), err => err.status === 404)
 }))
 
+test('内部成图合并只追加文件和版本关联，保留检查媒体期间的其他窗口修改', () => fixture(async ({ store, assets }) => {
+  const current = await assets.read('piece')
+  const saved = await assets.save('piece', current.revision, { ...current, outlineText: '已保存' })
+  // 普通上传保持严格修订检查，不能通过伪造合并选项跳过。
+  await assert.rejects(assets.import('piece', Readable.from([PNG]), { name: 'ordinary.png', revision: current.revision, mergeCoverResult: true }), { status: 409 })
+  const merging = new ContentAssets(store, { inspect: async () => {
+    const latest = await assets.read('piece')
+    await assets.save('piece', latest.revision, { ...latest, outlineText: '检查图片期间更新', publish: { ...latest.publish, description: '最新发布文案' }, publishEdited: { description: true } })
+    return { width: 1152, height: 1536 }
+  } })
+  const result = await merging.import('piece', Readable.from([PNG]), { name: 'cover.png', revision: saved.revision, coverRatio: '3:4', mergeCoverResult: true })
+  const reopened = await assets.read('piece')
+  assert.equal(reopened.outlineText, '检查图片期间更新')
+  assert.equal(reopened.publish.description, '最新发布文案')
+  assert.deepEqual(reopened.coverDesign.variants['3:4'].imageIds, [result.asset.id])
+  assert.equal(reopened.assets.length, current.assets.length + 1)
+}))
+
 test('并行 Host：同一修订只能成功保存一次，不会覆盖另一窗口', () => fixture(async ({ root, assets }) => {
   const ws = await assets.read('piece')
   const other = new ContentAssets(new Store(root), { inspect })
@@ -338,4 +356,24 @@ test('首页收藏：本机抓取明确失败，可仅存链接；媒体上传�
     assert.equal(media.kind, 'image')
     assert.deepEqual(await readFile(await storedAssetPath(store.filesDir, media.src.slice(17))), PNG)
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)) }
+}))
+
+
+test('多封面选择重启保留顺序，回收默认封面清理比例槽位并使用下一张', () => fixture(async ({ root, assets }) => {
+  const first = await importPng(assets, 0, { name: '竖版.png', coverResult: true, coverRatio: '3:4' })
+  const second = await importPng(assets, first.workspace.revision, { name: '横版.png', coverResult: true, coverRatio: '16:9' })
+  let ws = await assets.save('piece', second.workspace.revision, { ...second.workspace,
+    selectedCover: first.asset.id, selectedCoverIds: [first.asset.id, second.asset.id, first.asset.id, 'missing'],
+    publish: { ...second.workspace.publish, browser: { covers: { '3x4': first.asset.id, '16x9': second.asset.id } } },
+  })
+  const restarted = new ContentAssets(new Store(root), { inspect })
+  assert.deepEqual((await restarted.read('piece')).selectedCoverIds, [first.asset.id, second.asset.id])
+  ws = await restarted.recycle('piece', ws.revision, first.asset.id)
+  assert.equal(ws.selectedCover, second.asset.id)
+  assert.deepEqual(ws.selectedCoverIds, [second.asset.id])
+  assert.deepEqual(ws.publish.browser.covers, { '16x9': second.asset.id })
+  ws = await restarted.recycle('piece', ws.revision, first.asset.id, true)
+  assert.deepEqual(ws.selectedCoverIds, [second.asset.id], '恢复素材不自动加入发布选择')
+  ws = await restarted.save('piece', ws.revision, { ...ws, selectedCover: '', selectedCoverIds: [], publish: { ...ws.publish, browser: { covers: {} } } })
+  assert.deepEqual((await new ContentAssets(new Store(root), { inspect }).read('piece')).selectedCoverIds, [])
 }))

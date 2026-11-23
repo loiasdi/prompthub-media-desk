@@ -1,3 +1,4 @@
+import { Select as SelectControl } from './select.jsx'
 import React from 'react'
 import { lang, t } from './i18n.js'
 import { Dialog, Icon } from './ui.jsx'
@@ -5,6 +6,8 @@ import { exportMaitianProject } from './workspace.js'
 import { MaitianPrepare } from './maitian-prepare.jsx'
 import { ApiInterruptionOverview } from './api-recovery.jsx'
 import { MAITIAN_PLATFORMS, MAPPED_PLATFORMS, COVER_RATIOS } from '../src/publish/maitian/platforms.js'
+import { coverAssetRatio, generatedCoverSelections } from '../src/cover-assets.js'
+import { coverSelectOptions } from './cover.js'
 
 const PLATFORMS = Object.fromEntries(MAITIAN_PLATFORMS.map(p => [p.name, p.id]))
 const DIRECT_PLATFORMS = MAITIAN_PLATFORMS.filter(p => ['xhs', 'channels'].includes(p.id))
@@ -44,7 +47,7 @@ export function useMaitianBundle({ item, draft, update, assets, publishing }) {
   const hasChannels = selectedPlatforms.includes('channels')
   const anyLocked = selectedPlatforms.some(id => Boolean(publishing?.lockedPlatforms?.[id]))
 
-  const signature = stableJson([item.id, draft.publish, draft.selectedVideo, draft.selectedCover])
+  const signature = stableJson([item.id, draft.publish, draft.selectedVideo, draft.selectedCover, draft.selectedCoverIds])
   React.useEffect(() => { setResult(null); setConfirmExisting(false); setError(''); generation.current++ }, [signature])
   React.useEffect(() => () => { generation.current++ }, [])
 
@@ -72,6 +75,15 @@ export function useMaitianBundle({ item, draft, update, assets, publishing }) {
     }
   }
 
+  const openExportFolder = async () => {
+    if (!result?.exportId || running.current) return
+    running.current = true
+    setBusy('reveal'); setError('')
+    try { await request('reveal', { exportId: result.exportId }) }
+    catch (failure) { setError(failure.message) }
+    finally { running.current = false; setBusy('') }
+  }
+
   const checks = [
     ...(publish.format !== 'video' ? [{ text: '发布类型为视频', done: false, issue: '麦田工程打包仅支持视频，请返回「资料配齐」切回视频或改选其他渠道。' }] : []),
     { text: '目标平台', done: selectedPlatforms.length > 0, issue: selectedPlatforms.length ? '' : '请至少勾选一个麦田平台。' },
@@ -86,20 +98,13 @@ export function useMaitianBundle({ item, draft, update, assets, publishing }) {
   return {
     publish, browser, selectedPlatforms, neededRatios, hasChannels, anyLocked,
     settingsOpen, setSettingsOpen, busy, error, result, confirmExisting, setConfirmExisting,
-    patch, patchBrowser, togglePlatform, exportProject, checks, canExport,
+    patch, patchBrowser, togglePlatform, exportProject, openExportFolder, checks, canExport,
     assets, item, draft, update, publishing,
   }
 }
 
 function detectCoverRatio(asset) {
-  const width = asset?.width || asset?.w
-  const height = asset?.height || asset?.h
-  if (!width || !height) return null
-  const ratio = width / height
-  if (Math.abs(ratio - 3 / 4) <= 0.01) return '3x4'
-  if (Math.abs(ratio - 4 / 3) <= 0.01) return '4x3'
-  if (Math.abs(ratio - 16 / 9) <= 0.01) return '16x9'
-  return null
+  return coverAssetRatio(asset).replace(':', 'x') || null
 }
 
 export function MaitianBundlePanel({ bundle }) {
@@ -110,6 +115,8 @@ export function MaitianBundlePanel({ bundle }) {
   const coverNotMapped = Boolean(neededRatios.length > 0 && step1Cover && !usedCoverIds.includes(step1Cover.id))
   const matchedRatio = coverNotMapped ? detectCoverRatio(step1Cover) : null
   const canQuickFillCover = Boolean(matchedRatio && neededRatios.includes(matchedRatio) && !browser.covers?.[matchedRatio])
+  const generatedCovers = generatedCoverSelections(images)
+  const missingCovers = Object.fromEntries(neededRatios.filter(ratio => !browser.covers?.[ratio] && generatedCovers[ratio]).map(ratio => [ratio, generatedCovers[ratio]]))
   return <>
     <section className="md-work-panel">
       <div className="md-work-panel-title">
@@ -135,6 +142,7 @@ export function MaitianBundlePanel({ bundle }) {
     </section>
     {selectedPlatforms.length > 0 && publish.format === 'video' ? <section className="md-work-panel">
       <div className="md-work-panel-title"><h3>{t('平台差异与预约设置')}</h3><span>{t('可选')}</span></div>
+      {Object.keys(missingCovers).length ? <button type="button" className="md-btn is-small" onClick={() => patchBrowser({ covers: { ...browser.covers, ...missingCovers } })}>{t('按比例填入生成封面')}</button> : null}
       {hasChannels ? <label className="md-field"><span>{t('视频号短标题')} *</span><input required value={browser.shortTitle || ''} placeholder={t('请输入视频号短标题，原版组件会校验长度')} onChange={event => patchBrowser({ shortTitle: event.target.value })} /></label> : null}
       {coverNotMapped ? <div className="md-publish-source-notice" style={{ marginTop: 12 }}>
         <p>{canQuickFillCover ? t('第 1 页已选封面「{name}」符合 {ratio} 比例，可直接填入。', { name: step1Cover.name, ratio: matchedRatio }) : t('第 1 页的默认封面不会自动裁剪，如需自定义封面请在下方按平台所需比例指定。')}</p>
@@ -143,19 +151,16 @@ export function MaitianBundlePanel({ bundle }) {
       <div className="md-maitian-covers">
         {neededRatios.map(ratio => <label className="md-field" key={ratio}>
           <span>{t('工程封面')} {ratio}</span>
-          <select value={browser.covers?.[ratio] || ''} onChange={event => patchBrowser({ covers: { ...browser.covers, [ratio]: event.target.value } })}>
-            <option value="">{t('使用平台默认封面')}</option>
-            {images.map(asset => <option value={asset.id} key={asset.id}>{asset.name}</option>)}
-          </select>
+          <SelectControl options={[{ value: '', label: t('使用平台默认封面') }, ...coverSelectOptions(assets, ratio)]} value={browser.covers?.[ratio] || ''} onChange={event => patchBrowser({ covers: { ...browser.covers, [ratio]: event.target.value } })} />
         </label>)}
       </div>
       <div className="md-maitian-schedule">
         <label className="md-field">
           <span>{t('工程预约时间')}</span>
-          <select value={publish.mode === 'scheduled' ? 'scheduled' : 'now'} onChange={event => patch({ mode: event.target.value === 'scheduled' ? 'scheduled' : 'now', timezone: 'Asia/Shanghai' })}>
+          <SelectControl value={publish.mode === 'scheduled' ? 'scheduled' : 'now'} onChange={event => patch({ mode: event.target.value === 'scheduled' ? 'scheduled' : 'now', timezone: 'Asia/Shanghai' })}>
             <option value="now">{t('立即填写')}</option>
             <option value="scheduled">{t('平台预约（北京时间）')}</option>
-          </select>
+          </SelectControl>
         </label>
         {publish.mode === 'scheduled' ? <label className="md-field"><span>Asia/Shanghai (UTC+08:00)</span><input type="datetime-local" value={publish.when} onChange={event => patch({ when: event.target.value, timezone: 'Asia/Shanghai' })} /></label> : null}
       </div>
@@ -165,7 +170,7 @@ export function MaitianBundlePanel({ bundle }) {
 }
 
 export function MaitianExportConsole({ bundle }) {
-  const { selectedPlatforms, anyLocked, busy, error, result, confirmExisting, setConfirmExisting, exportProject, checks, canExport, item } = bundle
+  const { selectedPlatforms, anyLocked, busy, error, result, confirmExisting, setConfirmExisting, exportProject, openExportFolder, checks, canExport, item } = bundle
   const required = checks.filter(row => !row.optional)
   const ready = required.filter(row => row.done).length
   const selectedNames = MAITIAN_PLATFORM_LIST.filter(p => selectedPlatforms.includes(p.id)).map(p => t(p.name)).join(' + ')
@@ -187,8 +192,10 @@ export function MaitianExportConsole({ bundle }) {
       {error ? <p className="md-publish-error" role="alert">{error}</p> : null}
       {result ? <div className="md-maitian-result" role="status">
         <p><strong>{t('麦田工程已保存到项目设置的成稿导出目录')}</strong></p>
+        <p>{t('麦田助手正常导入时选择这个工程目录，无需下载。需要备份或转移时，再点击下方按钮生成压缩包。')}</p>
         {result.exportDirectory ? <p><code>{result.exportDirectory}</code></p> : null}
-        <a className="md-btn is-small is-wide" href={result.downloadPath} download>{t('下载压缩包')}</a>
+        <button type="button" className="md-btn is-small is-wide" disabled={Boolean(busy)} onClick={openExportFolder}><Icon name="folder" size={14} />{t(busy === 'reveal' ? '正在打开…' : '打开所在文件夹')}</button>
+        <a className="md-btn is-small is-wide" href={result.downloadPath} download>{t('按需打包并下载工程压缩包')}</a>
         {result.warnings?.map((warning, index) => <p key={index}>{t('麦田组件提示')}：{warning}</p>)}
       </div> : null}
     </div>
@@ -249,7 +256,7 @@ export function MaitianSettingsDialog({ item, draft, update, assets, publishing,
       {config ? <>
         <label className="md-maitian-check"><input type="checkbox" checked={settings.enabled} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, enabled: event.target.checked }))} /><span>{t('启用本机专用 Chrome')}</span></label>
         <p className="md-publish-pending">{t('浏览器在 DSH Host 所在机器打开，使用独立资料。安装组件与平台登录均需在这个窗口完成。')}</p>
-        <label className="md-field"><span>{t('组件来源')}</span><select value={settings.source} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, source: event.target.value }))}><option value="store">{t('专用 Chrome 已安装的商店版')}</option><option value="local">{t('原版组件本地目录（开发排障）')}</option></select></label>
+        <label className="md-field"><span>{t('组件来源')}</span><SelectControl value={settings.source} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, source: event.target.value }))}><option value="store">{t('专用 Chrome 已安装的商店版')}</option><option value="local">{t('原版组件本地目录（开发排障）')}</option></SelectControl></label>
         {settings.source === 'local' ? <label className="md-field"><span>{t('原版组件绝对目录')}</span><input value={settings.localComponentDir} disabled={Boolean(busy)} placeholder={t(config.localComponentConfigured ? '已配置，留空保留' : '输入本机原版组件目录')} onChange={event => setSettings(value => ({ ...value, localComponentDir: event.target.value }))} /></label> : null}
         <div className="md-maitian-settings-grid">
           <label className="md-field"><span>{t('专用 Chrome 调试端口')}</span><input type="number" min="1024" max="65535" value={settings.port} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, port: Number(event.target.value) }))} /></label>
@@ -272,9 +279,9 @@ export function MaitianSettingsDialog({ item, draft, update, assets, publishing,
           <summary>{t('实验性：本机浏览器直驱与登录预检')}</summary>
           <label className="md-field">
             <span>{t('直驱目标平台')}</span>
-            <select value={directPlatform} disabled={Boolean(busy)} onChange={event => setDirectPlatform(event.target.value)}>
+            <SelectControl value={directPlatform} disabled={Boolean(busy)} onChange={event => setDirectPlatform(event.target.value)}>
               {DIRECT_PLATFORMS.map(entry => <option key={entry.id} value={entry.id}>{t(entry.name)}</option>)}
-            </select>
+            </SelectControl>
           </label>
           {PLATFORMS[draft.publish.platform] !== directPlatform ? <div className="md-publish-source-notice" style={{ marginTop: 8 }}>
             <p>{t('直驱快照会按选定目标平台生成，不会修改稿件的平台字段。')}</p>
@@ -315,7 +322,7 @@ export function MaitianExport({ item, draft, update, assets, publishing }) {
   const [browserResult, setBrowserResult] = React.useState(null)
   const running = React.useRef(false)
   const generation = React.useRef(0)
-  const signature = stableJson([item.id, draft.publish, draft.selectedVideo, draft.selectedCover])
+  const signature = stableJson([item.id, draft.publish, draft.selectedVideo, draft.selectedCover, draft.selectedCoverIds])
   React.useEffect(() => { setResult(null); setConfirmExisting(false); generation.current++ }, [signature])
   React.useEffect(() => { if (draft.publish.provider === 'maitian') setOpen(true) }, [draft.publish.provider])
   React.useEffect(() => () => { generation.current++ }, [])
@@ -357,6 +364,9 @@ export function MaitianExport({ item, draft, update, assets, publishing }) {
     const value = await exportMaitianProject(item.id, platform, confirmExisting)
     if (current()) setResult(value)
   })
+  const openExportFolder = () => perform('reveal', async () => {
+    if (result?.exportId) await request('reveal', { exportId: result.exportId })
+  })
   const diagnostic = config?.diagnostic
   const dirty = Boolean(config && (settings.source !== config.source || settings.enabled !== config.enabled || settings.port !== config.port || settings.fillTimeoutMinutes !== (config.fillTimeoutMinutes ?? 360) || settings.localComponentDir || settings.nodePath || settings.chromePath))
   const browserDisabled = Boolean(busy) || dirty || !config?.enabled
@@ -374,7 +384,7 @@ export function MaitianExport({ item, draft, update, assets, publishing }) {
       {config ? <>
         <label><input type="checkbox" checked={settings.enabled} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, enabled: event.target.checked }))} />{t('启用本机专用 Chrome')}</label>
         <p>{t('浏览器在 DSH Host 所在机器打开，使用独立资料。安装组件与平台登录均需在这个窗口完成。')}</p>
-        <label className="md-field"><span>{t('组件来源')}</span><select value={settings.source} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, source: event.target.value }))}><option value="store">{t('专用 Chrome 已安装的商店版')}</option><option value="local">{t('原版组件本地目录（开发排障）')}</option></select></label>
+        <label className="md-field"><span>{t('组件来源')}</span><SelectControl value={settings.source} disabled={Boolean(busy)} onChange={event => setSettings(value => ({ ...value, source: event.target.value }))}><option value="store">{t('专用 Chrome 已安装的商店版')}</option><option value="local">{t('原版组件本地目录（开发排障）')}</option></SelectControl></label>
         {settings.source === 'local' ? <label className="md-field"><span>{t('原版组件绝对目录')}</span><input value={settings.localComponentDir} disabled={Boolean(busy)} placeholder={t(config.localComponentConfigured ? '已配置，留空保留' : '输入本机原版组件目录')} onChange={event => setSettings(value => ({ ...value, localComponentDir: event.target.value }))} /></label> : null}
         <label className="md-field"><span>{t('Chrome 可执行文件（可选）')}</span><input value={settings.chromePath} disabled={Boolean(busy)} placeholder={t('留空保留已保存设置')} onChange={event => setSettings(value => ({ ...value, chromePath: event.target.value }))} /></label>
         <label className="md-field"><span>{t('独立 Node 可执行文件（可选）')}</span><input value={settings.nodePath} disabled={Boolean(busy)} placeholder={t('留空保留已保存设置')} onChange={event => setSettings(value => ({ ...value, nodePath: event.target.value }))} /></label>
@@ -402,12 +412,12 @@ export function MaitianExport({ item, draft, update, assets, publishing }) {
       {platform && publish.format === 'video' ? <>
         {config ? <p>{t('浏览器资料')}：{config.profileId}{(browser.profileId || 'default') !== config.profileId ? <> · <button type="button" className="md-btn is-small" disabled={Boolean(busy)} onClick={() => patchBrowser({ profileId: config.profileId })}>{t('使用当前专用资料')}</button></> : null}</p> : null}
         {platform === 'channels' ? <label className="md-field"><span>{t('视频号短标题')} *</span><input required value={browser.shortTitle || ''} onChange={event => patchBrowser({ shortTitle: event.target.value })} /></label> : null}
-        {COVER_RATIOS[platform].map(ratio => <label className="md-field" key={ratio}><span>{t('工程封面')} {ratio}</span><select value={browser.covers?.[ratio] || ''} onChange={event => patchBrowser({ covers: { ...browser.covers, [ratio]: event.target.value } })}><option value="">{t('使用平台默认封面')}</option>{assets.filter(asset => asset.type === 'image').map(asset => <option value={asset.id} key={asset.id}>{asset.name}</option>)}</select></label>)}
-        <label className="md-field"><span>{t('工程预约时间')}</span><select value={publish.mode === 'scheduled' ? 'scheduled' : 'now'} onChange={event => patch({ mode: event.target.value === 'scheduled' ? 'scheduled' : publish.provider === 'maitian' ? 'now' : 'manual', timezone: 'Asia/Shanghai' })}><option value="now">{t('立即填写')}</option><option value="scheduled">{t('平台预约（北京时间）')}</option></select></label>
+        {COVER_RATIOS[platform].map(ratio => <label className="md-field" key={ratio}><span>{t('工程封面')} {ratio}</span><SelectControl options={[{ value: '', label: t('使用平台默认封面') }, ...coverSelectOptions(assets, ratio)]} value={browser.covers?.[ratio] || ''} onChange={event => patchBrowser({ covers: { ...browser.covers, [ratio]: event.target.value } })} /></label>)}
+        <label className="md-field"><span>{t('工程预约时间')}</span><SelectControl value={publish.mode === 'scheduled' ? 'scheduled' : 'now'} onChange={event => patch({ mode: event.target.value === 'scheduled' ? 'scheduled' : publish.provider === 'maitian' ? 'now' : 'manual', timezone: 'Asia/Shanghai' })}><option value="now">{t('立即填写')}</option><option value="scheduled">{t('平台预约（北京时间）')}</option></SelectControl></label>
         {publish.mode === 'scheduled' ? <label className="md-field"><span>Asia/Shanghai (UTC+08:00)</span><input type="datetime-local" value={publish.when} onChange={event => patch({ when: event.target.value, timezone: 'Asia/Shanghai' })} /></label> : null}
         <label><input type="checkbox" checked={confirmExisting} onChange={event => setConfirmExisting(event.target.checked)} />{t('已核对平台已有内容，确认导出不会造成重复发布')}</label>
         <button type="button" className="md-btn" disabled={Boolean(busy) || item.sample || !draft.selectedVideo || !shortTitleReady} onClick={exportProject}>{t(busy === 'export' ? '正在生成工程' : '导出麦田工程')}</button>
-        {result ? <div role="status"><p>{t('麦田工程已保存到项目设置的成稿导出目录')}</p><a className="md-btn" href={result.downloadPath} download>{t('下载压缩包')}</a>{result.warnings.map((warning, index) => <p key={index}>{t('麦田组件提示')}：{warning}</p>)}</div> : null}
+        {result ? <div role="status"><p>{t('麦田工程已保存到项目设置的成稿导出目录')}</p><p>{t('麦田助手正常导入时选择这个工程目录，无需下载。需要备份或转移时，再点击下方按钮生成压缩包。')}</p><button type="button" className="md-btn is-small" disabled={Boolean(busy)} onClick={openExportFolder}><Icon name="folder" size={14} />{t(busy === 'reveal' ? '正在打开…' : '打开所在文件夹')}</button><a className="md-btn" href={result.downloadPath} download>{t('按需打包并下载工程压缩包')}</a>{result.warnings.map((warning, index) => <p key={index}>{t('麦田组件提示')}：{warning}</p>)}</div> : null}
       </> : <p>{t('麦田工程支持 B站、小红书、抖音、视频号、YouTube、X、Instagram 单篇视频')}</p>}
       <MaitianPrepare item={item} draft={draft} assets={assets} platform={platform} config={config}
         preflight={browserResult?.op === 'preflight' ? browserResult.value : null} disabled={browserDisabled} busy={busy}

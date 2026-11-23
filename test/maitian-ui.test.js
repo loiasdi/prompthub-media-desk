@@ -109,9 +109,10 @@ test('填写保护时限可配置，未保存时阻断浏览器操作并说明�
   assert.equal(button(renderer, '检查平台登录').props.disabled, false)
 })
 
-test('稿件变更后丢弃迟到的导出结果；工程写入项目导出目录并保留下载入口', async t => {
+test('稿件变更后丢弃迟到的导出结果；工程写入项目导出目录并支持打开文件夹和下载', async t => {
   const initial = props()
-  const renderer = await render(t, async () => Response.json(config()), initial)
+  const requests = []
+  const renderer = await render(t, async (url, options) => { requests.push({ url, options }); return Response.json(config()) }, initial)
   await expand(renderer)
   let settle, exportArgs
   globalThis.__maitianUIExport = (...args) => { exportArgs = args; return new Promise(resolve => { settle = resolve }) }
@@ -121,12 +122,17 @@ test('稿件变更后丢弃迟到的导出结果；工程写入项目导出目�
   await act(async () => renderer.update(React.createElement(MaitianExport, updated)))
   await act(async () => settle({ downloadPath: '/stale-archive', warnings: ['旧结果'] }))
   assert.equal(renderer.root.findAllByType('a').length, 0)
-  globalThis.__maitianUIExport = async () => ({ downloadPath: 'media-desk/publish/maitian/download?exportId=new', warnings: ['上游原始校验提示'] })
+  globalThis.__maitianUIExport = async () => ({ exportId: 'new', downloadPath: 'media-desk/publish/maitian/download?exportId=new', warnings: ['上游原始校验提示'] })
   await act(async () => button(renderer, '导出麦田工程').props.onClick())
   assert.equal(renderer.root.findByType('a').props.href, 'media-desk/publish/maitian/download?exportId=new')
   assert.match(text(renderer), /项目设置的成稿导出目录/)
+  assert.match(text(renderer), /无需下载/)
+  assert.match(text(renderer), /备份或转移/)
   assert.match(text(renderer), /上游原始校验提示/)
   assert.match(text(renderer), /项目设置的成稿导出目录/)
+  await act(async () => button(renderer, '打开所在文件夹').props.onClick())
+  assert.equal(requests.at(-1).url, 'media-desk/publish/maitian/reveal')
+  assert.deepEqual(JSON.parse(requests.at(-1).options.body), { exportId: 'new' })
 })
 
 test('保存归一化只改变对象字段顺序时保留迟到的导出结果', async t => {

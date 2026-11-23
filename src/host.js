@@ -47,6 +47,12 @@ function json(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+function revealInFileManager(path) {
+  const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'explorer' : 'xdg-open'
+  const args = process.platform === 'darwin' ? ['-R', path] : process.platform === 'win32' ? [`/select,${path}`] : [path]
+  return new Promise((resolve, reject) => execFile(command, args, error => error ? reject(error) : resolve()))
+}
+
 async function readBuffer(req, limit) {
   const chunks = []
   let size = 0
@@ -363,6 +369,13 @@ export async function route(ctx, store, desk, req, res) {
         const result = await maitian.export(body, exportsRoot)
         await rememberExportLocation(maitian.config.root, result.exportId, exportsRoot)
         return json(res, 200, result)
+      }
+      if (path === 'publish/maitian/reveal') {
+        if (Object.keys(body).some(key => key !== 'exportId') || typeof body.exportId !== 'string') return json(res, 400, { error: '工程目录字段无效' })
+        const exportsRoot = await rememberedExportLocation(maitian.config.root, body.exportId) || await maitianExportsRoot()
+        const directory = await maitian.reveal(body.exportId, exportsRoot)
+        await (desk.revealFolder || revealInFileManager)(directory)
+        return json(res, 200, { directory })
       }
       if (path === 'publish/maitian/prepare') {
         if (Object.keys(body).some(key => !['id', 'revision', 'platform', 'account'].includes(key))) return json(res, 400, { error: '浏览器准备字段无效' })
